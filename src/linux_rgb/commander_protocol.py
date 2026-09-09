@@ -19,8 +19,25 @@ Device: Corsair Commander Core, USB ``1b1c:0c32``, HID interface 0.
 
 from __future__ import annotations
 
-# 96-byte reports; hidapi prepends a report-id byte, hence 97 on the wire.
-REPORT_LENGTH = 96
+# 🚨 **64-byte reports, and this number is load-bearing in a way that gives you
+# no feedback when it is wrong.**
+#
+# The device's own HID report descriptor settles it -- `75 08 96 40 00` is
+# Report Size 8 bits x Report Count 0x0040, so both the input and output reports
+# are 64 bytes. OpenRGB agrees: PID 0x0C32 is its COMMANDER_CORE2 and selects
+# PACKET_SIZE_V3 = 65, which is these 64 bytes plus hidapi's report-id byte.
+#
+# This was 96 for a long time, and everything *looked* fine: the four-byte
+# command header sits at the front of every packet, so it always arrived intact
+# and every command was acknowledged, LED counts read back correctly, and the
+# topology was right. Only the colour payload -- which lives past the header and
+# spans many packets -- was being cut off, so the LEDs simply never lit while the
+# protocol reported perfect health. Nothing in the transport can detect this;
+# only the hardware can, by staying dark.
+#
+# Read it from the descriptor rather than assuming:
+#   od -An -tx1 /sys/class/hidraw/hidrawN/device/report_descriptor
+REPORT_LENGTH = 64
 PACKET_LENGTH = REPORT_LENGTH + 1
 
 # -- commands ---------------------------------------------------------------

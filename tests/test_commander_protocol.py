@@ -24,6 +24,7 @@ from linux_rgb.commander_protocol import (
     DATA_TYPE_DIRECT_COLOUR,
     ENDPOINT_DIRECT_COLOUR,
     PACKET_LENGTH,
+    REPORT_LENGTH,
     PORT_SLOTS,
     PUMP_LEDS,
     colour_buffer,
@@ -79,19 +80,33 @@ class EndpointWriteTest(unittest.TestCase):
         self.assertEqual(body[6:9], data)
 
     def test_full_colour_buffer_chunking(self) -> None:
-        """699 bytes must split 87 + 6x93 + 54 across one write and seven more."""
+        """699 bytes across 64-byte reports: 55 in the first write, then 61 each.
+
+        🚨 The packet COUNT depends on REPORT_LENGTH, and getting that wrong is
+        invisible from the transport: the command header survives truncation, so
+        every packet is still acknowledged while the colour data is cut off and
+        the LEDs stay dark. This device's reports are 64 bytes -- see the note on
+        REPORT_LENGTH.
+        """
 
         packets = endpoint_write_packets(
             ENDPOINT_DIRECT_COLOUR, DATA_TYPE_DIRECT_COLOUR, bytes(COLOUR_BUFFER_LENGTH)
         )
+        expected_more = -(-(COLOUR_BUFFER_LENGTH - (REPORT_LENGTH - 9)) // (REPORT_LENGTH - 3))
         kinds = [tuple(p[2:4]) for p in packets]
         self.assertEqual(kinds[0], CMD_OPEN_ENDPOINT)
         self.assertEqual(kinds[1], CMD_WRITE)
         self.assertEqual(kinds[-1], CMD_CLOSE_ENDPOINT)
-        self.assertEqual(
-            kinds[2:-1], [CMD_WRITE_MORE] * 7, "612 bytes after the first packet"
+        self.assertTrue(
+            all(len(packet) == PACKET_LENGTH for packet in packets),
+            "every report must be exactly the size the descriptor declares",
         )
-        self.assertEqual(len(packets), 10)
+        self.assertEqual(
+            kinds[2:-1],
+            [CMD_WRITE_MORE] * expected_more,
+            f"{COLOUR_BUFFER_LENGTH - (REPORT_LENGTH - 9)} bytes after the first packet"
+        )
+        self.assertEqual(len(packets), 2 + expected_more + 1, "open + write + continuations + close")
 
     def test_every_packet_is_report_sized(self) -> None:
         packets = endpoint_write_packets(

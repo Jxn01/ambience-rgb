@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Protocol
+from contextlib import contextmanager
+from typing import Iterator, Protocol
 
 from linux_rgb.config import (
     BUS_SMBUS,
@@ -59,6 +60,35 @@ HEALTH_TIMEOUT_SECONDS = 5.0
 # reconnect costs a full re-push. A genuine wedge never answers again, so it
 # trips this anyway; it just takes half a minute longer to say so.
 HEALTH_FAILURES_BEFORE_RECONNECT = 6
+
+
+@contextmanager
+def released_on_failure(sink) -> Iterator[None]:
+    """Drop the sink's live handle if the operation inside fails.
+
+    🚨 **Both sinks had this bug, so it lives here rather than in either of
+    them.** ``ResilientSink`` catches a failure and retries on a timer, but it
+    cannot reach inside to invalidate the handle -- so a socket or HID handle
+    that has died gets reused for every retry and fails identically forever.
+
+    Measured on the OpenRGB side: after the server was restarted underneath a
+    running daemon, the only path that ever reconnected was the health check,
+    six timeouts later. Recovery took 71 s; dropping the handle here took it to
+    11 s. The Commander Core sink had the same shape and no equivalent rescue at
+    all -- an unplugged AIO would never have been reopened.
+
+    Any exception counts. A handle whose last operation failed is suspect
+    whatever the reason, and reopening one is cheap.
+    """
+
+    try:
+        yield
+    except Exception:
+        try:
+            sink.close()
+        except Exception:  # noqa: BLE001 - the original failure is the news
+            pass
+        raise
 
 
 class Sink(Protocol):
@@ -247,7 +277,7 @@ class OpenRGBSink:
         assert self._client is not None
         now = time.monotonic()
         self._check_health(now)
-        try:
+        with released_on_failure(self):
             for device, segments, bus, per_zone in self._targets:
                 # Rate-limit per bus. SMBus is shared with sensor reads; the USB
                 # devices have no such constraint and get the full rate.
@@ -259,14 +289,6 @@ class OpenRGBSink:
                     continue
                 self._send_colours(device, segments, per_zone, near, far)
                 self._sent[key] = ((near, far), time.monotonic())
-        except OpenRGBError:
-            # 🚨 A dead socket must be dropped here, not merely reported. The
-            # resilient wrapper catches the error but cannot clear the client,
-            # so without this every later write fails identically on the same
-            # broken pipe and only the health check ever reconnects -- six
-            # timeouts, ~30 s of darkness, measured after an OpenRGB restart.
-            self.close()
-            raise
         for bus in {target[2] for target in self._targets}:
             if now - self._last_write.get(bus, 0.0) >= self._interval(bus):
                 self._last_write[bus] = now
@@ -367,12 +389,9 @@ class OpenRGBSink:
         if self._client is None:
             self.connect()
         assert self._client is not None
-        try:
+        with released_on_failure(self):
             for device, segments, _bus, per_zone in self._targets:
                 self._send_colours(device, segments, per_zone, (0, 0, 0), (0, 0, 0))
-        except OpenRGBError:
-            self.close()  # same reason as write(): never reuse a dead socket
-            raise
 
     def close(self) -> None:
         if self._client is not None:
@@ -401,13 +420,15 @@ class CommanderCoreSink:
         assert self._device is not None
         pump = near if self._config.pump_group == GROUP_NEAR else far
         fans = near if self._config.fan_group == GROUP_NEAR else far
-        self._device.set_colour(pump, fans)
+        with released_on_failure(self):
+            self._device.set_colour(pump, fans)
 
     def black(self) -> None:
         if self._device is None:
             self.connect()
         assert self._device is not None
-        self._device.black()
+        with released_on_failure(self):
+            self._device.black()
 
     def close(self) -> None:
         if self._device is not None:

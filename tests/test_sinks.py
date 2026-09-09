@@ -419,3 +419,92 @@ class DeadSocketTest(unittest.TestCase):
         with self.assertRaises(OpenRGBError):
             sink.write(NEAR, FAR)
         self.assertIsNone(sink._client)
+
+
+class ReleaseOnFailureTest(unittest.TestCase):
+    """🚨 Both sinks must drop a handle whose last operation failed.
+
+    ResilientSink retries on a timer but cannot reach inside to invalidate the
+    handle, so without this a dead socket or HID handle is reused for every
+    retry and fails identically forever. The OpenRGB side took 71 s to recover
+    from a server restart because of it; the Commander side had no rescue at all
+    and would never have reopened an unplugged AIO.
+    """
+
+    def setUp(self) -> None:
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    class _Sink:
+        name = "fake"
+
+        def __init__(self) -> None:
+            self.closed = 0
+
+        def close(self) -> None:
+            self.closed += 1
+
+    def test_it_closes_on_failure_and_re_raises(self) -> None:
+        from linux_rgb.sinks import released_on_failure
+
+        sink = self._Sink()
+        with self.assertRaises(ValueError):
+            with released_on_failure(sink):
+                raise ValueError("device fell off the bus")
+        self.assertEqual(sink.closed, 1)
+
+    def test_it_does_nothing_on_success(self) -> None:
+        from linux_rgb.sinks import released_on_failure
+
+        sink = self._Sink()
+        with released_on_failure(sink):
+            pass
+        self.assertEqual(sink.closed, 0)
+
+    def test_a_failing_close_does_not_mask_the_real_error(self) -> None:
+        from linux_rgb.sinks import released_on_failure
+
+        class Exploding(self._Sink):
+            def close(self) -> None:
+                raise RuntimeError("close also broken")
+
+        with self.assertRaises(ValueError):
+            with released_on_failure(Exploding()):
+                raise ValueError("the real problem")
+
+    def test_the_commander_sink_drops_its_device(self) -> None:
+        from linux_rgb.config import parse_config
+        from linux_rgb.sinks import CommanderCoreSink
+
+        class Dead:
+            def set_colour(self, pump, fans):
+                raise RuntimeError("Reply 0x01 does not acknowledge command 0x07")
+
+            def black(self):
+                raise RuntimeError("gone")
+
+            def close(self):
+                self.closed = True
+
+        sink = CommanderCoreSink(parse_config({"socket": {"path": "/tmp/x.sock"}}).commander)
+        sink._device = Dead()
+        with self.assertRaises(RuntimeError):
+            sink.write(NEAR, FAR)
+        self.assertIsNone(sink._device, "an unplugged AIO must be reopened, not reused")
+
+    def test_the_commander_sink_drops_it_on_black_too(self) -> None:
+        from linux_rgb.config import parse_config
+        from linux_rgb.sinks import CommanderCoreSink
+
+        class Dead:
+            def black(self):
+                raise RuntimeError("gone")
+
+            def close(self):
+                self.closed = True
+
+        sink = CommanderCoreSink(parse_config({"socket": {"path": "/tmp/x.sock"}}).commander)
+        sink._device = Dead()
+        with self.assertRaises(RuntimeError):
+            sink.black()
+        self.assertIsNone(sink._device)

@@ -8,7 +8,7 @@ happened, including the parts that went wrong.
 
 | | |
 |---|---|
-| `linux-rgb` | 120 tests, private repo, pushed |
+| `linux-rgb` | 125 tests, private repo, pushed |
 | `matterlights` | publisher + master-off publishing + LED rendering, 227 tests, pushed |
 | LEDs driven | **207** across 7 controllers |
 | Verified live | capture → bulbs → socket → OpenRGB + AIO, on real hardware |
@@ -278,13 +278,23 @@ because a killed daemon leaves the last colour standing. Nothing had to recover
 for it to pass. It now blanks the device first, so only a real write can satisfy
 it. Third instance this session of a check that cannot distinguish two states.
 
-### A connection error must drop the client
+### A failed operation must drop the handle -- in BOTH sinks
 
 Found by that injection, not by reading the code. `ResilientSink` catches a write
-failure but cannot clear the sink's client, so after the server died the daemon
-kept writing to the same broken pipe -- failing identically every time. The only
-path that ever reconnected was the health check, six timeouts later. Measured
-recovery **71 s**; dropping the client at the point of failure took it to **11 s**.
+failure but cannot reach inside to clear the sink's handle, so after the server
+died the daemon kept writing to the same broken pipe -- failing identically every
+time. The only path that ever reconnected was the health check, six timeouts
+later. Measured recovery **71 s**; dropping the handle at the point of failure
+took it to **11 s**.
+
+The sweep found the same shape in `CommanderCoreSink`, which had no equivalent
+rescue at all: an AIO that was unplugged, or whose handle went bad, would have
+been retried forever against the dead handle and never reopened. It has not been
+seen in the wild only because the transport's drain happens to self-correct the
+one failure mode encountered so far.
+
+So the behaviour is a shared primitive, `released_on_failure`, used by both --
+rather than the same fix written twice and drifting.
 
 ## Deliberately not done
 

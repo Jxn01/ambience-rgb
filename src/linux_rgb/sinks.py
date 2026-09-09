@@ -153,6 +153,28 @@ class OpenRGBSink:
             # is not theoretical: with only SETCUSTOMMODE the GPU cycled its
             # rainbow for hours while every readback claimed it was in Direct.
             client.set_direct_mode(device_index)
+        self._apply_static(client)
+
+    def _apply_static(self, client: OpenRGBClient) -> None:
+        """Set every ``static`` device to its fixed colour, once per connection.
+
+        Deliberately here rather than in the tick loop, and deliberately repeated
+        on every reconnect: OpenRGB's Direct mode does not persist, so restarting
+        the server leaves these devices dark and an ``excluded`` rule means
+        nothing ever puts them back. On this rig that silently cost the keyboard
+        its white every time the server was restarted, including by our own
+        recovery path.
+        """
+
+        for controller in client.controllers:
+            rule = self._config.rule_for(controller.name)
+            if rule is None or rule.static is None or controller.led_count <= 0:
+                continue
+            client.set_direct_mode(controller.index)
+            client.update_leds(controller.index, [rule.static] * controller.led_count)
+            self._logger.info(
+                "OpenRGB: %s held at static %s", controller.name, rule.static
+            )
 
     def _plan(self, client: OpenRGBClient) -> list[tuple[int, tuple, str, bool]]:
         """Resolve controllers to write targets: (device, segments, bus, per_zone).

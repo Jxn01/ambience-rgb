@@ -51,6 +51,15 @@ class DeviceRule:
     group: str = GROUP_FAR
     bus: str = BUS_USB
     zones: dict[str, str] = field(default_factory=dict)
+    static: tuple[int, int, int] | None = None
+    """A fixed colour to set once per connection, instead of syncing.
+
+    For hardware that should simply sit at one colour. It is written on connect
+    and on every reconnect, and never on the tick loop -- which is the point:
+    OpenRGB's Direct mode does not persist, so restarting the server leaves such
+    a device dark, and an ``excluded`` rule means nothing puts it back. That kept
+    costing this rig its keyboard.
+    """
 
     def matches(self, controller_name: str) -> bool:
         return self.match.lower() in controller_name.lower()
@@ -84,6 +93,30 @@ class Config:
             if rule.matches(controller_name):
                 return rule
         return None
+
+
+def _validate_static(value, where: str) -> tuple[int, int, int] | None:
+    """Parse a fixed colour: ``[r, g, b]`` or ``"#rrggbb"``."""
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip().lstrip("#")
+        if len(text) != 6:
+            raise ValueError(f"{where}.static must be #rrggbb, got {value!r}")
+        try:
+            return tuple(int(text[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+        except ValueError as error:
+            raise ValueError(f"{where}.static is not a hex colour: {value!r}") from error
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError(f"{where}.static must be three numbers or #rrggbb, got {value!r}")
+    channels = []
+    for channel in value:
+        number = int(channel)
+        if not 0 <= number <= 255:
+            raise ValueError(f"{where}.static channel out of range: {channel!r}")
+        channels.append(number)
+    return (channels[0], channels[1], channels[2])
 
 
 def _validate_group(value: str, where: str) -> str:
@@ -169,6 +202,7 @@ def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
                     str(name): _validate_group(group, f"{where}.zones[{name!r}]")
                     for name, group in zones.items()
                 },
+                static=_validate_static(entry.get("static"), where),
             )
         )
 

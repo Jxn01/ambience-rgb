@@ -102,6 +102,7 @@ repo. `$LINUX_RGB_CONFIG` overrides both.
 | `devices[].group` | `near`, `far`, or `excluded`. |
 | `devices[].bus` | `usb` or `smbus`, selecting which rate applies. |
 | `devices[].zones` | Per-zone group overrides, e.g. `{ "IO Cover" = "near" }`. |
+| `devices[].static` | A fixed colour (`"#rrggbb"` or `[r, g, b]`) set once per connection instead of synced. |
 
 ⚠️ **`match` is a substring, not an exact name, deliberately.** OpenRGB renames
 devices between versions — the Commander Core's ports went from `RGB Port 1` to
@@ -180,10 +181,12 @@ it times a request/reply every 5 s and drops the connection when the server does
 not answer within 2 s — but a wedged server usually needs
 `systemctl --user restart linux-rgb-openrgb`.
 
-⚠️ **Restarting the server resets every device to whatever it reports, including
-the excluded Keychron**, which goes dark rather than staying white. Direct mode
-does not persist. Put it back with `linux-rgb`'s client or the OpenRGB GUI; a
-white that survives needs the keyboard's own onboard mode.
+⚠️ **Restarting the server resets every device to whatever it reports.** Direct
+mode does not persist, so a device nothing writes to comes back dark. That is
+what `devices[].static` is for: the Keychron is `excluded` from syncing but
+carries `static = "#ffffff"`, which is re-applied on every connection, including
+after a server restart. Without it, "excluded" meant nothing ever put its white
+back and it had to be fixed by hand each time.
 
 **Colours are stale — the case lags the screen by seconds or shows an old
 frame.** The write side is fire-and-forget: `sendall` returns in microseconds

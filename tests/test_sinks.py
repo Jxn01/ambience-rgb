@@ -302,3 +302,72 @@ class HealthCheckTest(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class StaticColourTest(unittest.TestCase):
+    """A `static` device is set once per connection, never on the tick loop.
+
+    🚨 The reason it exists: OpenRGB's Direct mode does not persist, so every
+    restart of the server left the excluded keyboard dark -- and "excluded"
+    meant nothing would ever put it back. It had to be fixed by hand each time,
+    including after our own recovery restarts.
+    """
+
+    def setUp(self) -> None:
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    class _Controller:
+        def __init__(self, index, name, led_count):
+            self.index, self.name, self.led_count, self.zones = index, name, led_count, []
+
+    class _Client(_FakeClient):
+        def __init__(self, controllers):
+            super().__init__()
+            self.controllers = controllers
+            self.direct: list[int] = []
+
+        def set_direct_mode(self, device):
+            self.direct.append(device)
+            return True
+
+    def _sink(self, config_devices):
+        config = parse_config({"socket": {"path": "/tmp/x.sock"}, "devices": config_devices})
+        return OpenRGBSink(config)
+
+    def test_a_static_device_is_written_its_colour(self) -> None:
+        sink = self._sink([{"match": "Keychron", "group": "excluded", "static": "#ffffff"}])
+        client = self._Client([self._Controller(4, "Keychron K0 Max", 26)])
+        sink._apply_static(client)
+        self.assertEqual(len(client.writes), 1)
+        device, zone, colours = client.writes[0]
+        self.assertEqual((device, zone), (4, None))
+        self.assertEqual(set(colours), {(255, 255, 255)})
+        self.assertEqual(len(colours), 26, "every LED must be covered")
+
+    def test_it_pushes_direct_mode_first(self) -> None:
+        """Without it the keyboard keeps its firmware effect and ignores us."""
+
+        sink = self._sink([{"match": "Keychron", "group": "excluded", "static": "#ffffff"}])
+        client = self._Client([self._Controller(4, "Keychron K0 Max", 26)])
+        sink._apply_static(client)
+        self.assertEqual(client.direct, [4])
+
+    def test_a_device_with_no_static_is_left_alone(self) -> None:
+        sink = self._sink([{"match": "Keychron", "group": "excluded"}])
+        client = self._Client([self._Controller(4, "Keychron K0 Max", 26)])
+        sink._apply_static(client)
+        self.assertEqual(client.writes, [])
+
+    def test_a_static_device_is_not_a_sync_target(self) -> None:
+        """It must not join the tick loop, or it would follow the screen."""
+
+        sink = self._sink([{"match": "Keychron", "group": "excluded", "static": "#ffffff"}])
+        client = self._Client([self._Controller(4, "Keychron K0 Max", 26)])
+        self.assertEqual(sink._plan(client), [])
+
+    def test_a_zero_led_device_is_skipped(self) -> None:
+        sink = self._sink([{"match": "Keychron", "group": "excluded", "static": "#ffffff"}])
+        client = self._Client([self._Controller(4, "Keychron K0 Max", 0)])
+        sink._apply_static(client)
+        self.assertEqual(client.writes, [])

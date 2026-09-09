@@ -64,7 +64,13 @@ group = "far"
 bus = "usb"
 
 # Explicitly excluded by the owner: the numpad keeps its own white.
+#
+# `static` sets it once per connection instead of syncing it. Without that,
+# "excluded" means nothing ever writes to it -- and OpenRGB's Direct mode does
+# not persist, so every restart of the server left this keyboard dark with
+# nothing to put it back.
 [[devices]]
 match = "Keychron"
 group = "excluded"
 bus = "usb"
+static = "#ffffff"

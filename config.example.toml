@@ -1,0 +1,70 @@
+# linux-rgb configuration for jxn-garuda.
+#
+# Copy to ~/.config/linux-rgb/config.toml to change anything; this file is the
+# fallback so a fresh checkout runs without setup.
+
+[socket]
+# Must match RGB_PUBLISH_SOCKET in matterlights' .env. $XDG_RUNTIME_DIR is the
+# right home for it: tmpfs, per-user, cleaned up at logout.
+path = "$XDG_RUNTIME_DIR/linux-rgb.sock"
+
+[openrgb]
+# 127.0.0.1 deliberately. OpenRGB's own default is 0.0.0.0, which puts control
+# of this machine's lighting on the LAN for anyone who asks.
+host = "127.0.0.1"
+port = 6742
+
+[rates]
+# Per BUS, not global. USB HID devices are happy at the full sync rate; SMBus is
+# shared with the sensors that fan control and monitoring read, and hammering it
+# is the one genuinely risky thing this program does.
+usb_hz = 5.0
+smbus_hz = 1.0
+
+[commander]
+# The Corsair Commander Core, driven by our own hidraw driver because neither
+# OpenRGB nor liquidctl can. Both the pump ring and the fans read as "far":
+# they light the case, not the screen.
+enabled = true
+pump_group = "far"
+fan_group = "far"
+
+# --- devices ---------------------------------------------------------------
+# `match` is a case-insensitive SUBSTRING of the OpenRGB controller name, not an
+# exact match, because OpenRGB renames devices between versions.
+
+# The monitor's own rear lighting: as near as it gets.
+[[devices]]
+match = "AW3225QF"
+group = "near"
+bus = "usb"
+
+[[devices]]
+match = "GeForce RTX 5090"
+group = "near"
+bus = "smbus"
+
+[[devices]]
+match = "Dominator Titanium"
+group = "near"
+bus = "smbus"
+
+# The board is split per ZONE. Its board-surface lighting sits behind the screen
+# and reads as near; the addressable headers drive case strips and fans, which
+# read as far. This is the one controller where a single group would be wrong.
+[[devices]]
+match = "ASRock X870E Taichi"
+group = "far"
+bus = "usb"
+zones = { "IO Cover" = "near", "PCB" = "near" }
+
+[[devices]]
+match = "Razer Naga"
+group = "far"
+bus = "usb"
+
+# Explicitly excluded by the owner: the numpad keeps its own white.
+[[devices]]
+match = "Keychron"
+group = "excluded"
+bus = "usb"

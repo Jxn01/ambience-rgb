@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenRGB SDK server for linux-rgb
+Documentation=https://github.com/Jxn01/linux-rgb
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+# Bound to the loopback deliberately. OpenRGB's own default is 0.0.0.0, which
+# hands control of this machine's lighting to anything on the LAN.
+ExecStart=/usr/bin/openrgb --server --server-host 127.0.0.1 --server-port 6742
+Restart=on-failure
+RestartSec=5
+# Detection walks SMBus and every HID device; on a cold boot it can take a few
+# seconds before the socket answers.
+TimeoutStartSec=60
+Nice=5
+
+[Install]
+WantedBy=graphical-session.target

@@ -7,7 +7,10 @@ name = "linux-rgb"
 version = "1.0.0"
 description = "Ambient screen-to-light sync for the RGB hardware in jxn-garuda"
 requires-python = ">=3.11"
-dependencies = ["hid"]
+# hid comes from the SYSTEM python-hidapi (cython-hidapi), NOT from PyPI.
+# The PyPI package named "hid" is a DIFFERENT library with a different API and
+# shadows the system one inside a venv, so it must never be declared here.
+dependencies = []
 
 [project.scripts]
 linux-rgb = "linux_rgb.__main__:main"

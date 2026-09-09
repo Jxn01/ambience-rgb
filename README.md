@@ -1,7 +1,182 @@
 # linux-rgb
 
-Ambient screen-to-light sync for the RGB hardware in `jxn-garuda`, driven by
-[matterlights](https://github.com/Jxn01/matterlights).
+Ambient screen-to-light sync for the RGB hardware in `jxn-garuda`, driven by the
+colours [matterlights](https://github.com/Jxn01/matterlights) has already
+computed for the Matter bulbs. The lamps and the case show the same thing.
 
-Private and machine-specific by design — see
-[the design doc](docs/specs/2026-09-09-linux-rgb-design.md).
+**Private and machine-specific on purpose.** It hard-codes nothing, but its
+shipped configuration describes one rig, and it includes a hand-written driver
+for one AIO controller that no available tool can drive. Windows has better
+tooling for this; the design reasoning is in
+[docs/specs/2026-09-09-linux-rgb-design.md](docs/specs/2026-09-09-linux-rgb-design.md).
+
+---
+
+## How it fits together
+
+```
+matterlights-sync
+  capture -> ambience -> Matter bulbs
+                      -> unix datagram socket ---.
+                                                  |
+linux-rgb (this)                                  |
+  subscribe  <------------------------------------'
+  near/far -> OpenRGBSink       -> RAM x2, GPU, mouse, monitor, motherboard
+           -> CommanderCoreSink -> AIO pump + fans   (our own hidraw driver)
+```
+
+MatterLights captures the screen; this does not. A second capture would double
+the PipeWire load and let the lamps and the case disagree during a scene change.
+
+## What it drives
+
+207 LEDs across seven controllers on this rig.
+
+| Device | LEDs | Group | Bus | Driver |
+|---|---|---|---|---|
+| Alienware AW3225QF (Logo, Number, Power) | 3 | near | USB | OpenRGB |
+| ASUS TUF RTX 5090 | 4 | near | SMBus | OpenRGB |
+| Corsair Dominator Titanium DDR5 ×2 | 24 | near | SMBus | OpenRGB |
+| ASRock X870E Taichi — *IO Cover*, *PCB* | 24 | near | USB | OpenRGB |
+| ASRock X870E Taichi — *addressable headers* | 97 | far | USB | OpenRGB |
+| Razer Naga V2 Pro (Logo, Numpad) | 2 | far | USB | OpenRGB |
+| Corsair Commander Core — pump | 29 | far | USB HID | **ours** |
+| Corsair Commander Core — fans (3 × 8) | 24 | far | USB HID | **ours** |
+| Keychron K0 Max | — | **excluded** | — | — |
+
+**near** is what sits around the screen; **far** is what lights the room. The
+motherboard is split *per zone* because both are true of it at once.
+
+## Install
+
+```bash
+scripts/install.sh
+```
+
+It refuses a conda interpreter, checks `hid` is importable, builds the venv with
+`--system-site-packages`, disables OpenRGB's Commander Core detector (backing the
+config up first), installs three systemd units and enables them.
+
+Then tell MatterLights to publish, in its `.env`:
+
+```ini
+RGB_EXTENSION_ENABLED=true
+RGB_PUBLISH_SOCKET=/run/user/1000/linux-rgb.sock
+```
+
+and `systemctl --user restart matterlights-sync`.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `linux-rgb run` | The daemon. What the systemd unit runs. |
+| `linux-rgb off` | Write black to everything once and exit. What the shutdown unit runs. |
+| `linux-rgb devices` | Print what would be driven, with groups, buses and LED counts. **Run this first when something looks wrong.** |
+| `linux-rgb -v …` | Debug logging, including every colour decision. |
+
+## Units
+
+| Unit | Scope | Purpose |
+|---|---|---|
+| `linux-rgb-openrgb.service` | user | The OpenRGB SDK server, bound to `127.0.0.1` |
+| `linux-rgb.service` | user | The daemon |
+| `linux-rgb-lights-off.service` | **system** | `ExecStop` writes black at shutdown |
+
+The daemon only `Wants=` the OpenRGB server. A dead server should cost the
+motherboard and RAM, not the AIO, which needs no server at all.
+
+## Configuration
+
+`~/.config/linux-rgb/config.toml`, falling back to `config.example.toml` in the
+repo. `$LINUX_RGB_CONFIG` overrides both.
+
+| Key | Meaning |
+|---|---|
+| `socket.path` | Must equal MatterLights' `RGB_PUBLISH_SOCKET`. `$XDG_RUNTIME_DIR` is expanded, with a working fallback when root runs it at shutdown. |
+| `openrgb.host` / `openrgb.port` | SDK server. Keep the host on the loopback. |
+| `rates.usb_hz` / `rates.smbus_hz` | Update rate **per bus**. |
+| `commander.enabled` | Drive the AIO at all. |
+| `commander.pump_group` / `commander.fan_group` | `near` or `far`. |
+| `devices[].match` | Case-insensitive **substring** of the OpenRGB controller name. |
+| `devices[].group` | `near`, `far`, or `excluded`. |
+| `devices[].bus` | `usb` or `smbus`, selecting which rate applies. |
+| `devices[].zones` | Per-zone group overrides, e.g. `{ "IO Cover" = "near" }`. |
+
+⚠️ **`match` is a substring, not an exact name, deliberately.** OpenRGB renames
+devices between versions — the Commander Core's ports went from `RGB Port 1` to
+`Corsair Fan Header 1` between 1.0rc3 and the git build. An exact name would
+silently stop matching and the device would just stop lighting.
+
+⚠️ **`smbus_hz` should stay well below `usb_hz`.** SMBus is shared with the
+sensors that fan control and monitoring read. Hammering it is the one genuinely
+risky thing this program does.
+
+## When the lights go off
+
+The hardware has no off state — stop writing and it reverts to its firmware
+pattern, which on this rig is green fans. So "off" means *writing black*, and
+the daemon writes on every tick rather than only on change.
+
+| Trigger | Behaviour |
+|---|---|
+| Display sleeps | Black, daemon keeps running |
+| Screen content dark | Black — mirrors the bulbs, using MatterLights' own verdict |
+| **RGB** switch off (dashboard) | Black |
+| **Lamp** master switch off | **Ignored — RGB keeps syncing.** It has its own switch. |
+| Custom colour/pattern mode | Black — this syncs ambient mode only |
+| MatterLights stops | Black after 3 s, rather than freezing on the last colour |
+| SIGTERM / logout | Black, then exit |
+| Shutdown | `ExecStop` writes black |
+
+## The Commander Core driver
+
+The Corsair Commander Core (`1b1c:0c32`) is driven directly over
+`/dev/hidraw20`, because nothing else can:
+
+| Tool | Reads the 53-LED topology | Sets colours |
+|---|---|---|
+| OpenRGB 1.0rc3, CLI | yes | yes |
+| OpenRGB 1.0rc3, **SDK server** | **no** — every zone reads 0 | no; `RESIZEZONE` crashes it |
+| OpenRGB git (0.9.2459) | pump only | pump only |
+| liquidctl 1.16 | yes | **no** — `set_color` is `raise NotSupportedByDriver` |
+| **linux-rgb** | yes | **yes — all 53** |
+
+Protocol details are in `commander_protocol.py`, tested byte-for-byte because
+the lighting endpoint is **write-only**: a wrong offset produces no error, just
+the wrong LEDs.
+
+⚠️ **Exactly one process may hold a HID device.** OpenRGB's detector for the
+Commander Core must stay disabled or the two fight over `/dev/hidraw20`, and the
+symptoms are silent — zones reading as size 0, colours that never apply, no
+error anywhere. `scripts/install.sh` disables it; `scripts/uninstall.sh` tells
+you how to put it back.
+
+## Troubleshooting
+
+**Nothing lights up.** `linux-rgb devices`. If OpenRGB is unavailable, check
+`systemctl --user status linux-rgb-openrgb`. If the Commander Core is
+unavailable, something else is holding `/dev/hidraw20` — almost always an
+OpenRGB whose detector got re-enabled.
+
+**Everything is white.** Expected on a greyscale screen: it is above the dark
+cutoff but carries no saturation, so it normalises to white at full brightness.
+A property of the shared ambience model, identical on the bulbs. Raise
+`DARK_THRESHOLD` in MatterLights to cut such screens off instead.
+
+**The fans are green.** Nothing is writing to them. Green is the Commander
+Core's firmware fallback about ten seconds after the last commit.
+
+**Colours lag or stutter.** Lower `rates.smbus_hz` first.
+
+**The RGB is dark but the lamps are on.** Check the dashboard's *RGB* switch —
+it is independent of the lamps' switch by design.
+
+## Development
+
+```bash
+PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests
+```
+
+No network, no hardware, no OpenRGB required — the protocol layers are pure and
+the transports are tested against fakes.

@@ -247,3 +247,22 @@ PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests
 
 No network, no hardware, no OpenRGB required — the protocol layers are pure and
 the transports are tested against fakes.
+
+### Integration checks
+
+Everything above proves the logic. It cannot prove a light lit. That takes
+hardware, and one of them takes a person:
+
+```bash
+scripts/integration.sh                        # policy + soak
+python tests/integration/check_failures.py    # restarts/kills services
+python tests/integration/check_hardware.py    # asks you what you saw
+```
+
+🚨 **`check_hardware.py` is the only check here that can fail for the reason
+that matters.** The others read state back from the OpenRGB server's own model,
+which proves a packet was accepted and nothing more. This project spent a day
+with every command acknowledged, every LED count correct and every colour
+reading back exactly as sent, while the AIO was completely dark — the report size
+was wrong and the truncation fell past the command header. See
+[tests/integration/README.md](tests/integration/README.md).

@@ -8,7 +8,7 @@ happened, including the parts that went wrong.
 
 | | |
 |---|---|
-| `linux-rgb` | 71 tests, 4 commits, private repo, pushed |
+| `linux-rgb` | 74 tests, 7 commits, private repo, pushed |
 | `matterlights` | +2 commits (publisher, master-off publishing), 210 tests, pushed |
 | LEDs driven | **207** across 7 controllers |
 | Verified live | capture → bulbs → socket → OpenRGB + AIO, on real hardware |

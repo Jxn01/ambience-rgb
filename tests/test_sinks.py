@@ -40,10 +40,10 @@ class _FakeClient:
         return self.lag
 
     def update_leds(self, device, colours) -> None:
-        self.writes.append((device, None, colours[0], len(colours)))
+        self.writes.append((device, None, tuple(colours)))
 
     def update_zone_leds(self, device, zone, colours) -> None:
-        self.writes.append((device, zone, colours[0], len(colours)))
+        self.writes.append((device, zone, tuple(colours)))
 
     def close(self) -> None:
         self.closed = True
@@ -64,12 +64,15 @@ def _sink(targets) -> tuple[OpenRGBSink, _FakeClient]:
     return sink, client
 
 
-# (device, zone, group, leds, bus)
-_ONE = [(6, 3, "near", 15, "usb")]
-_BOARD = [
-    (6, 0, "far", 1, "usb"),
-    (6, 1, "far", 8, "usb"),
-    (6, 3, "near", 15, "usb"),
+# (device, segments, bus, per_zone)
+_ONE = [(6, (("near", 2),), "usb", False)]
+# One controller split across three zones -- written as ONE packet whose array
+# carries each zone's colour in order.
+_BOARD = [(6, (("far", 1), ("far", 2), ("near", 2)), "usb", False)]
+# The excluded-zone fallback, which must still go zone by zone.
+_PER_ZONE = [
+    (6, ((0, "far", 1),), "usb", True),
+    (6, ((3, "near", 2),), "usb", True),
 ]
 
 
@@ -103,7 +106,7 @@ class ChangeFilterTest(unittest.TestCase):
         sink, client = _sink(_ONE)
         sink.write(NEAR, FAR)
         sink.write((99, 99, 99), FAR)
-        self.assertEqual([w[2] for w in client.writes], [NEAR, (99, 99, 99)])
+        self.assertEqual([w[2][0] for w in client.writes], [NEAR, (99, 99, 99)])
 
     def test_a_jitter_smaller_than_the_epsilon_is_ignored(self) -> None:
         """🚨 Exact equality is not enough: the ambient colour moves a unit or
@@ -128,28 +131,40 @@ class ChangeFilterTest(unittest.TestCase):
 
         sink, client = _sink(_ONE)
         sink.write(NEAR, FAR)
-        colour, when = sink._sent[(6, 3)]
-        sink._sent[(6, 3)] = (colour, when - REFRESH_SECONDS - 1)
+        key = (6, None)
+        colours, when = sink._sent[key]
+        sink._sent[key] = (colours, when - REFRESH_SECONDS - 1)
         sink.write(NEAR, FAR)
         self.assertEqual(len(client.writes), 2)
 
-    def test_each_target_is_tracked_separately(self) -> None:
-        """A shared cache would let one zone's colour suppress another's."""
+    def test_a_split_controller_is_one_packet_carrying_every_zone(self) -> None:
+        """🚨 Six zone writes stalled OpenRGB's ASRock controller outright; the
+        same colours as one whole-device array ran clean."""
 
         sink, client = _sink(_BOARD)
         sink.write(NEAR, FAR)
-        self.assertEqual(len(client.writes), 3)
-        self.assertEqual(
-            {(d, z): c for d, z, c, _n in client.writes},
-            {(6, 0): FAR, (6, 1): FAR, (6, 3): NEAR},
-        )
+        self.assertEqual(len(client.writes), 1, "a split device must still be one packet")
+        device, zone, colours = client.writes[0]
+        self.assertEqual((device, zone), (6, None))
+        self.assertEqual(colours, (FAR, FAR, FAR, NEAR, NEAR))
 
-    def test_the_near_far_split_survives_the_filter(self) -> None:
+    def test_an_excluded_zone_forces_the_per_zone_path(self) -> None:
+        """A whole-device write must colour every LED, so it cannot skip a zone."""
+
+        sink, client = _sink(_PER_ZONE)
+        sink.write(NEAR, FAR)
+        self.assertEqual([(d, z) for d, z, _c in client.writes], [(6, 0), (6, 3)])
+        self.assertEqual([c[0] for _d, _z, c in client.writes], [FAR, NEAR])
+
+    def test_a_move_in_either_colour_resends_the_device(self) -> None:
+        """The array carries both groups, so a change in either must go out."""
+
         sink, client = _sink(_BOARD)
         sink.write(NEAR, FAR)
         client.writes.clear()
         sink.write(NEAR, (7, 7, 7))  # only far moves
-        self.assertEqual([(d, z) for d, z, _c, _n in client.writes], [(6, 0), (6, 1)])
+        self.assertEqual(len(client.writes), 1)
+        self.assertEqual(client.writes[0][2], ((7, 7, 7), (7, 7, 7), (7, 7, 7), NEAR, NEAR))
 
     def test_black_is_always_sent_even_when_unchanged(self) -> None:
         """Every exit path writes black; "we think it is already black" is not
@@ -161,7 +176,7 @@ class ChangeFilterTest(unittest.TestCase):
         sink.black()
         sink.black()
         self.assertEqual(len(client.writes), 2)
-        self.assertTrue(all(w[2] == (0, 0, 0) for w in client.writes))
+        self.assertTrue(all(set(w[2]) == {(0, 0, 0)} for w in client.writes))
 
     def test_a_reconnect_forgets_what_it_had_sent(self) -> None:
         """A restarted server shows nothing; believing otherwise leaves it dark."""
@@ -192,7 +207,7 @@ class BusRateLimitTest(unittest.TestCase):
         )
         client = _FakeClient()
         sink._client = client
-        sink._targets = [(6, 3, "near", 15, "usb")]
+        sink._targets = list(_ONE)
         sink.write(NEAR, FAR)
         sink.write((99, 99, 99), FAR)  # different colour, but far inside 1/5 s
         self.assertEqual(len(client.writes), 1)
@@ -215,7 +230,7 @@ class HealthCheckTest(unittest.TestCase):
         sink = OpenRGBSink(parse_config({"socket": {"path": "/tmp/x.sock"}}))
         sink._interval = lambda _bus: 0.0  # type: ignore[method-assign]
         sink._client = client
-        sink._targets = _ONE
+        sink._targets = list(_ONE)
         return sink
 
     def test_a_healthy_server_is_probed_and_written_to(self) -> None:

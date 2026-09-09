@@ -8,7 +8,7 @@ happened, including the parts that went wrong.
 
 | | |
 |---|---|
-| `linux-rgb` | 111 tests, private repo, pushed |
+| `linux-rgb` | 112 tests, private repo, pushed |
 | `matterlights` | publisher + master-off publishing + LED rendering, 227 tests, pushed |
 | LEDs driven | **207** across 7 controllers |
 | Verified live | capture → bulbs → socket → OpenRGB + AIO, on real hardware |
@@ -199,6 +199,35 @@ which is what finally distinguished the two.
 Fixed by sending `REQUEST_PROTOCOL_VERSION` (40) at connect, requesting every
 description at the negotiated version and echoing every mode back at the same
 one, so the two cannot drift apart.
+
+⚠️ **This was correct and it did not fix the freeze.** The commit that landed it
+said it did; the very next run still stalled at 36 s. Handshaking is right on its
+own terms, but the cause was elsewhere -- see below. A plausible mechanism that
+survives a code review is still a guess until the symptom actually goes away.
+
+### 🚨 The per-zone write path stalls OpenRGB's ASRock controller
+
+The real cause of the freeze. Writing the board's six zones as six
+`UPDATE_ZONE_LEDS` packets stalls the server: it stops applying anything on that
+connection, so the case sits on an old colour while writes pile up unread. It is
+timing-dependent, which is what made it look like six different bugs -- a fresh
+server survives a few frames, sometimes fifteen, then stops.
+
+The fix needs no cooperation from OpenRGB. **Zones are contiguous ranges of one
+LED array**, so the same colours can be written as a single whole-device
+`UPDATE_LEDS` whose array carries each zone's colour in order. Identical
+result, one packet instead of six, and it does not touch the path that breaks.
+
+Measured on this rig, modes pushed, colours changing every tick:
+
+| | |
+|---|---|
+| six per-zone writes | stalled within 1-2 frames |
+| one whole-device write | **400 ticks over 80 s, zero failures** |
+
+Targets fell from 11 to 6. A device with an *excluded* zone still needs the
+per-zone path, since a whole-device write must colour every LED it covers; the
+config here has none.
 
 ### The measurement that was worthless
 

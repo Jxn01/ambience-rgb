@@ -120,11 +120,11 @@ class OpenRGBSink:
         self._config = config
         self._logger = logger or LOGGER
         self._client: OpenRGBClient | None = None
-        # device index -> list of (zone index or None, group, led count)
-        self._targets: list[tuple[int, int | None, str, int, str]] = []
+        # (device, segments, bus, per_zone); see _plan for what segments holds.
+        self._targets: list[tuple[int, tuple, str, bool]] = []
         self._last_write: dict[str, float] = {}
-        # Per-target (device, zone) -> (colour, when it was last sent).
-        self._sent: dict[tuple[int, int | None], tuple[RGB, float]] = {}
+        # Per-target key -> ((near, far), when it was last sent).
+        self._sent: dict[tuple, tuple[tuple[RGB, RGB], float]] = {}
         self._checked_at = 0.0
         self._health_failures = 0
 
@@ -146,7 +146,7 @@ class OpenRGBSink:
                 "The OpenRGB server reported no drivable controllers -- "
                 "detection may still be running"
             )
-        for device_index in sorted({t[0] for t in self._targets}):
+        for device_index in sorted({target[0] for target in self._targets}):
             # Devices sitting in a firmware effect ignore colour writes until the
             # DEVICE is put into direct mode -- not merely the server's model of
             # it. The GPU ships on Rainbow and the ASRock board on Off, so this
@@ -154,15 +154,27 @@ class OpenRGBSink:
             # rainbow for hours while every readback claimed it was in Direct.
             client.set_direct_mode(device_index)
 
-    def _plan(self, client: OpenRGBClient) -> list[tuple[int, int | None, str, int, str]]:
-        """Resolve controllers to (device, zone, group, leds, bus) write targets.
+    def _plan(self, client: OpenRGBClient) -> list[tuple[int, tuple, str, bool]]:
+        """Resolve controllers to write targets: (device, segments, bus, per_zone).
 
-        A controller whose rule splits zones is planned per zone; one that does
-        not is planned as a single whole-device write, which is one packet
-        instead of six.
+        For a whole-device write ``segments`` is ``((group, led_count), ...)``
+        covering the device's LEDs in order, so a split controller is still one
+        packet. For the per-zone fallback it is ``((zone_index, group, count),)``.
+
+        🚨 **Prefer one whole-device write to several per-zone writes.** Zones are
+        contiguous ranges of the same LED array, so writing the array once says
+        exactly the same thing in one packet instead of six -- and on this rig the
+        per-zone path through OpenRGB's ASRock controller **stalls the server**.
+        Measured: whole-device writes ran 15/15 frames clean where zone writes
+        stalled within one or two, after which the server stopped applying
+        anything on that connection and the case froze on an old colour.
+
+        The exception is a device with an *excluded* zone. A whole-device write
+        must supply a colour for every LED, so it cannot leave one zone alone;
+        such a device keeps the per-zone path, and its risk.
         """
 
-        plan = []
+        plan: list[tuple[int, tuple, str, bool]] = []
         for controller in client.controllers:
             rule: DeviceRule | None = self._config.rule_for(controller.name)
             if rule is None:
@@ -173,13 +185,27 @@ class OpenRGBSink:
                 continue
 
             if rule.zones:
-                for zone in controller.zones:
-                    group = rule.group_for_zone(zone.name)
-                    if group == GROUP_EXCLUDED or zone.led_count == 0:
-                        continue
-                    plan.append((controller.index, zone.index, group, zone.led_count, rule.bus))
+                groups = [(zone, rule.group_for_zone(zone.name)) for zone in controller.zones]
+                if any(group == GROUP_EXCLUDED for _zone, group in groups):
+                    self._logger.info(
+                        "OpenRGB: %s has excluded zones; writing it zone by zone", controller.name
+                    )
+                    for zone, group in groups:
+                        if group == GROUP_EXCLUDED or zone.led_count == 0:
+                            continue
+                        plan.append(
+                            (controller.index, ((zone.index, group, zone.led_count),), rule.bus, True)
+                        )
+                    continue
+                segments = tuple(
+                    (group, zone.led_count) for zone, group in groups if zone.led_count > 0
+                )
+                if segments:
+                    plan.append((controller.index, segments, rule.bus, False))
             elif controller.led_count > 0:
-                plan.append((controller.index, None, rule.group, controller.led_count, rule.bus))
+                plan.append(
+                    (controller.index, ((rule.group, controller.led_count),), rule.bus, False)
+                )
             else:
                 self._logger.info(
                     "OpenRGB: %s reports zero LEDs; nothing to drive", controller.name
@@ -199,17 +225,18 @@ class OpenRGBSink:
         assert self._client is not None
         now = time.monotonic()
         self._check_health(now)
-        for device, zone, group, leds, bus in self._targets:
+        for device, segments, bus, per_zone in self._targets:
             # Rate-limit per bus. SMBus is shared with sensor reads; the USB
             # devices have no such constraint and get the full rate.
             last = self._last_write.get(bus, 0.0)
             if now - last < self._interval(bus):
                 continue
-            colour = near if group == GROUP_NEAR else far
-            if not self._should_send(device, zone, colour, now):
+            key = (device, segments[0][0] if per_zone else None)
+            if not self._should_send(key, (near, far), now):
                 continue
-            self._send_colour(device, zone, colour, leds)
-        for bus in {t[4] for t in self._targets}:
+            self._send_colours(device, segments, per_zone, near, far)
+            self._sent[key] = ((near, far), time.monotonic())
+        for bus in {target[2] for target in self._targets}:
             if now - self._last_write.get(bus, 0.0) >= self._interval(bus):
                 self._last_write[bus] = now
 
@@ -251,8 +278,8 @@ class OpenRGBSink:
         if lag > 0.5:
             self._logger.info("openrgb: server is %.2fs behind", lag)
 
-    def _should_send(self, device: int, zone: int | None, colour: RGB, now: float) -> bool:
-        """Whether this target needs the packet, or already shows this colour.
+    def _should_send(self, key: tuple, colours: tuple[RGB, RGB], now: float) -> bool:
+        """Whether this target needs the packet, or already shows these colours.
 
         🚨 **The write side of this protocol is fire-and-forget, so overrunning
         the server is invisible from here.** Every ``sendall`` returns in
@@ -269,21 +296,34 @@ class OpenRGBSink:
         controller from sitting on a stale frame.
         """
 
-        previous = self._sent.get((device, zone))
+        previous = self._sent.get(key)
         if previous is None:
             return True
-        colour_before, when = previous
+        colours_before, when = previous
         if (now - when) >= REFRESH_SECONDS:
             return True
-        return any(abs(a - b) >= COLOUR_EPSILON for a, b in zip(colour, colour_before))
+        return any(
+            abs(a - b) >= COLOUR_EPSILON
+            for colour, before in zip(colours, colours_before)
+            for a, b in zip(colour, before)
+        )
 
-    def _send_colour(self, device: int, zone: int | None, colour: RGB, leds: int) -> None:
+    def _send_colours(
+        self, device: int, segments: tuple, per_zone: bool, near: RGB, far: RGB
+    ) -> None:
+        """Put this target's colours on the wire, in as few packets as possible."""
+
         assert self._client is not None
-        if zone is None:
-            self._client.update_leds(device, [colour] * leds)
-        else:
-            self._client.update_zone_leds(device, zone, [colour] * leds)
-        self._sent[(device, zone)] = (colour, time.monotonic())
+        if per_zone:
+            for zone_index, group, count in segments:
+                self._client.update_zone_leds(
+                    device, zone_index, [near if group == GROUP_NEAR else far] * count
+                )
+            return
+        colours: list[RGB] = []
+        for group, count in segments:
+            colours.extend([near if group == GROUP_NEAR else far] * count)
+        self._client.update_leds(device, colours)
 
     def black(self) -> None:
         """Write black to every target unconditionally.
@@ -296,8 +336,8 @@ class OpenRGBSink:
         if self._client is None:
             self.connect()
         assert self._client is not None
-        for device, zone, _group, leds, _bus in self._targets:
-            self._send_colour(device, zone, (0, 0, 0), leds)
+        for device, segments, _bus, per_zone in self._targets:
+            self._send_colours(device, segments, per_zone, (0, 0, 0), (0, 0, 0))
 
     def close(self) -> None:
         if self._client is not None:

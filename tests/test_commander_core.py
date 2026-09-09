@@ -367,3 +367,90 @@ class DaemonDetectionTest(unittest.TestCase):
             server.close()
             self.assertTrue(path.exists(), "the file survives the process")
             self.assertFalse(daemon_is_listening(path))
+
+
+class EndpointRetryTest(unittest.TestCase):
+    """🚨 A dropped acknowledgement must not take the AIO out of service.
+
+    Under sustained streaming this controller occasionally fails to answer a
+    continuation packet inside the read timeout -- measured at ~0.4% of frames,
+    one every 45 s at 5 Hz during a twelve-minute soak. Propagated, each miss
+    took the sink out for its retry window, which is long enough for the fans to
+    revert to firmware green and flash.
+    """
+
+    class _FlakyHid(FakeHid):
+        """Drops the Nth REPLY once, then behaves.
+
+        Only real reply reads are counted. The drain also calls read(), with a
+        1 ms timeout, and an empty return there is its normal successful result
+        -- counting those made the fake fail somewhere unpredictable.
+        """
+
+        def __init__(self, fail_on: int) -> None:
+            super().__init__()
+            self.fail_on = fail_on
+            self.replies = 0
+
+        def read(self, length, timeout):
+            if timeout <= 1:  # a drain poll, not a reply read
+                return super().read(length, timeout)
+            self.replies += 1
+            if self.replies == self.fail_on:
+                return []  # no reply: exactly what was seen on the wire
+            return super().read(length, timeout)
+
+    def test_a_single_dropped_reply_is_retried_not_raised(self) -> None:
+        fake = self._FlakyHid(fail_on=2)
+        cc = _Opened(fake)
+        cc.led_counts = [29, 8, 8, 8, None, None, None]
+        cc.set_colour((10, 20, 30), (40, 50, 60))  # must not raise
+
+    def test_it_gives_up_eventually_rather_than_looping(self) -> None:
+        class Silent(FakeHid):
+            def read(self, length, timeout):
+                return []
+
+        cc = _Opened(Silent())
+        cc.led_counts = [29, 8, 8, 8, None, None, None]
+        with self.assertRaises(CommanderCoreError) as caught:
+            cc.set_colour((10, 20, 30), (40, 50, 60))
+        self.assertIn("attempts", str(caught.exception))
+
+    def test_the_retry_restarts_the_whole_sequence(self) -> None:
+        """Resending one packet into a half-finished transaction desyncs it."""
+
+        fake = self._FlakyHid(fail_on=3)
+        cc = _Opened(fake)
+        cc.led_counts = [29, 8, 8, 8, None, None, None]
+        cc.set_colour((1, 2, 3), (4, 5, 6))
+        opens = [p for p in fake.written if p[2] == 0x0D]
+        self.assertGreaterEqual(len(opens), 2, "a retry must re-open the endpoint")
+
+
+class ReadTimeoutBudgetTest(unittest.TestCase):
+    """🚨 The reply timeout is a latency budget for the WHOLE daemon.
+
+    The loop is single-threaded, so a failed exchange spends the entire timeout
+    with the OpenRGB sink waiting behind it. At 1000 ms one bad frame stalled the
+    loop for three seconds across the retries and made the motherboard miss its
+    colour as well -- a fault in one device surfacing as a fault in another.
+
+    Measured on this rig over 2020 exchanges: p50 3.0 ms, p99 3.0 ms, max 49 ms.
+    """
+
+    def test_the_timeout_is_generous_but_not_a_stall(self) -> None:
+        from linux_rgb.commander_core import _READ_TIMEOUT_MS
+
+        self.assertGreaterEqual(_READ_TIMEOUT_MS, 100, "must clear the 49 ms worst case")
+        self.assertLessEqual(
+            _READ_TIMEOUT_MS, 300, "a longer wait starves the other sink on every miss"
+        )
+
+    def test_a_whole_frame_of_failures_stays_under_a_second(self) -> None:
+        """Three attempts x ten packets must not add up to a visible stall."""
+
+        from linux_rgb.commander_core import _READ_TIMEOUT_MS
+
+        worst_case_seconds = 3 * _READ_TIMEOUT_MS / 1000
+        self.assertLess(worst_case_seconds, 1.0)

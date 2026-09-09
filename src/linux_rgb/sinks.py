@@ -36,6 +36,12 @@ RGB = tuple[int, int, int]
 # dead server, short enough that a restarted one is picked up without help.
 RETRY_SECONDS = 10.0
 
+# ⚠️ The Commander Core needs a much shorter one. It reverts to its firmware
+# pattern about ten seconds after the last commit, so a ten-second backoff is
+# almost exactly long enough to guarantee the fans flash green on any hiccup.
+# Its backoff must stay comfortably under that revert time.
+COMMANDER_RETRY_SECONDS = 2.0
+
 # How often an UNCHANGED colour is written again. The devices need an occasional
 # refresh so a controller that was reset or re-detected does not sit on a stale
 # frame, but writing an unchanged colour every tick is what floods the server.
@@ -102,10 +108,16 @@ class Sink(Protocol):
 class ResilientSink:
     """Wraps a sink so its failures are isolated and it recovers on its own."""
 
-    def __init__(self, sink: Sink, logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        sink: Sink,
+        logger: logging.Logger | None = None,
+        retry_seconds: float = RETRY_SECONDS,
+    ) -> None:
         self._sink = sink
         self._logger = logger or LOGGER
         self._failed_at: float | None = None
+        self._retry_seconds = retry_seconds
         self.name = sink.name
 
     @property
@@ -114,7 +126,7 @@ class ResilientSink:
 
     def _guard(self, action: str, call) -> bool:
         now = time.monotonic()
-        if self._failed_at is not None and (now - self._failed_at) < RETRY_SECONDS:
+        if self._failed_at is not None and (now - self._failed_at) < self._retry_seconds:
             return False
         try:
             call()
@@ -440,7 +452,13 @@ def build_sinks(config: Config, logger: logging.Logger | None = None) -> list[Re
     """Every configured sink, each wrapped so one failure cannot stop the rest."""
 
     log = logger or LOGGER
-    sinks: list[Sink] = [OpenRGBSink(config, log)]
+    sinks: list[ResilientSink] = [ResilientSink(OpenRGBSink(config, log), log)]
     if config.commander.enabled:
-        sinks.append(CommanderCoreSink(config.commander, log))
-    return [ResilientSink(sink, log) for sink in sinks]
+        # A shorter backoff, because this device forgets: see
+        # COMMANDER_RETRY_SECONDS.
+        sinks.append(
+            ResilientSink(
+                CommanderCoreSink(config.commander, log), log, COMMANDER_RETRY_SECONDS
+            )
+        )
+    return sinks

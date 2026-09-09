@@ -58,7 +58,8 @@ def _devices(config) -> int:
                     print(f"  {controller.name:<40} (no rule -- not driven)")
                     continue
                 if rule.group == "excluded":
-                    print(f"  {controller.name:<40} EXCLUDED")
+                    held = f" (held at #{'%02x%02x%02x' % rule.static})" if rule.static else ""
+                    print(f"  {controller.name:<40} EXCLUDED{held}")
                     continue
                 if rule.zones:
                     print(f"  {controller.name:<40} split by zone, bus={rule.bus}")

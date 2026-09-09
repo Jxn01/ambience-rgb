@@ -43,6 +43,26 @@ STALE_AFTER_SECONDS = 3.0
 SUPPORTED_PAYLOAD_VERSION = 1
 
 
+def _colour(value) -> tuple[int, int, int] | None:
+    """A payload field as an RGB triple, or None if it is not one.
+
+    Checking the LENGTH alone is not enough, and the earlier version did exactly
+    that: ``tuple("red")[:3]`` is ``('r', 'e', 'd')``, which is three items and
+    passes. Those characters then reach the sinks, where packing them raises and
+    degrades the sink for the retry window on every tick -- a malformed frame
+    quietly taking the lights down instead of being ignored.
+    """
+
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return None
+    channels = []
+    for channel in value:
+        if isinstance(channel, bool) or not isinstance(channel, int):
+            return None
+        channels.append(max(0, min(255, channel)))
+    return (channels[0], channels[1], channels[2])
+
+
 class Daemon:
     def __init__(self, config: Config, logger: logging.Logger | None = None) -> None:
         self._config = config
@@ -123,9 +143,9 @@ class Daemon:
         # but the only master switch for this hardware is rgb_on.
         if payload.get("screen_dark", False):
             return BLACK, BLACK
-        near = tuple(payload.get("near") or BLACK)[:3]
-        far = tuple(payload.get("far") or BLACK)[:3]
-        if len(near) != 3 or len(far) != 3:
+        near = _colour(payload.get("near"))
+        far = _colour(payload.get("far"))
+        if near is None or far is None:
             return BLACK, BLACK
         return near, far
 

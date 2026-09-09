@@ -191,3 +191,38 @@ class OpenRgbEmptyPlanTest(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class MalformedColourTest(unittest.TestCase):
+    """A bad frame must be ignored, not passed on to the hardware.
+
+    🚨 Checking the length alone is not enough: ``tuple("red")[:3]`` is
+    ``('r', 'e', 'd')`` -- three items, passes a length check, and then fails
+    inside the sink when the channels are packed. That degrades the sink on
+    every tick, so one malformed frame takes the lights down rather than being
+    skipped.
+    """
+
+    def test_strings_are_rejected_rather_than_split_into_characters(self) -> None:
+        self.assertEqual(Daemon.colours_for({**FRAME, "near": "red"}, stale=False), (BLACK, BLACK))
+
+    def test_every_channel_must_be_a_real_integer(self) -> None:
+        for bad in ("red", ["r", "g", "b"], [1, 2, "3"], [1.5, 2, 3], [None, 0, 0], {"r": 1}):
+            with self.subTest(near=bad):
+                self.assertEqual(
+                    Daemon.colours_for({**FRAME, "near": bad}, stale=False), (BLACK, BLACK)
+                )
+
+    def test_out_of_range_channels_are_clamped_not_rejected(self) -> None:
+        near, _far = Daemon.colours_for({**FRAME, "near": [-5, 300, 128]}, stale=False)
+        self.assertEqual(near, (0, 255, 128))
+
+    def test_a_good_frame_still_passes_through_untouched(self) -> None:
+        self.assertEqual(Daemon.colours_for(FRAME, stale=False), (NEAR, FAR))
+
+    def test_every_result_is_three_integers(self) -> None:
+        for bad in ([1, 2], [], "red", None, [1, 2, 3, 4, 5], [1, 2, "3"]):
+            with self.subTest(near=bad):
+                for colour in Daemon.colours_for({**FRAME, "near": bad}, stale=False):
+                    self.assertEqual(len(colour), 3)
+                    self.assertTrue(all(isinstance(c, int) for c in colour))

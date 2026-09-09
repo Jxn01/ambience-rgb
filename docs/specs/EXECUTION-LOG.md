@@ -8,7 +8,7 @@ happened, including the parts that went wrong.
 
 | | |
 |---|---|
-| `linux-rgb` | 125 tests, private repo, pushed |
+| `linux-rgb` | 137 tests, private repo, pushed |
 | `matterlights` | publisher + master-off publishing + LED rendering, 227 tests, pushed |
 | LEDs driven | **207** across 7 controllers |
 | Verified live | capture → bulbs → socket → OpenRGB + AIO, on real hardware |
@@ -295,6 +295,55 @@ one failure mode encountered so far.
 
 So the behaviour is a shared primitive, `released_on_failure`, used by both --
 rather than the same fix written twice and drifting.
+
+### 🚨 An unsolicited 0xF0 report, and a timeout that punished the wrong device
+
+The twelve-minute soak was the first sustained streaming this had ever seen, and
+it found what no readback could: `commander-core: write failed (No reply to
+command 0x07)` roughly every 25-50 seconds.
+
+Bisected rather than guessed, which mattered, because the first two theories were
+both wrong:
+
+| Test | Result |
+|---|---|
+| Commander alone at 5 Hz, 180 s | **0 failures** -- the device is fine |
+| Both sinks in one process | fails, at *identical* times across runs |
+| Same, health check disabled | identical -- not the health check |
+| Every colour value 0-255 in isolation | **none fail** -- not the data |
+
+Deterministic times pointed at instrumenting the exchange, and the signature was
+the same every time: **the controller emits an unsolicited report beginning
+`0xF0`**, in bursts lasting a few seconds. It answers nothing we sent; while it
+is happening the acknowledgement never comes. The skip loop discarded it
+correctly -- and then spent the **full 1000 ms read timeout** waiting for an ACK
+that was never coming.
+
+That timeout was the real defect, and it belonged to the whole daemon rather
+than to this device: the loop is single-threaded, so three attempts x 1000 ms
+stalled everything for three seconds, which is why the *motherboard* missed a
+colour check in the same soak. **A fault in one device was surfacing as a fault
+in another.**
+
+Measured over 2020 exchanges: p50 3.0 ms, p99 3.0 ms, max 49 ms. The timeout is
+now 250 ms -- five times the worst reply ever seen, and 4x cheaper to fail.
+
+The bursts are the device's own behaviour and cannot be fixed from here. What
+matters is the metric the owner would actually see, since the AIO reverts to
+firmware green about ten seconds after its last commit:
+
+| | |
+|---|---|
+| longest gap with **no successful write** | **2.14 s** |
+| successful writes over four minutes | 984, against 24 skips |
+
+Comfortably inside the revert window, so the fans hold their colour rather than
+flashing.
+
+⚠️ **A partial soak is not a trend.** At t+150 s of the verification run this was
+reported as fixed on the strength of zero failures so far. The failures were
+simply clustered later; the final tally was the same rate as before. Reporting
+an in-progress measurement as a result is how a regression gets called a fix.
 
 ## Deliberately not done
 

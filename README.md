@@ -212,6 +212,15 @@ A property of the shared ambience model, identical on the bulbs. Raise
 **The fans are green.** Nothing is writing to them. Green is the Commander
 Core's firmware fallback about ten seconds after the last commit.
 
+**The fans flash green every minute or so.** A dropped acknowledgement taking the
+sink out of service for longer than the AIO's ten-second memory. Under sustained
+streaming this controller occasionally fails to answer a continuation packet
+inside the read timeout -- about 0.4% of frames, measured over a twelve-minute
+soak. The endpoint write is retried whole (never packet-by-packet: the sequence
+is a transaction), and this sink's retry backoff is deliberately shorter than the
+others for exactly this reason. If it comes back, look for
+`commander-core: write failed` in the journal rather than suspecting the fans.
+
 **Colours lag or stutter.** Lower `rates.smbus_hz` first.
 
 **The RGB is dark but the lamps are on.** Check the dashboard's *RGB* switch —

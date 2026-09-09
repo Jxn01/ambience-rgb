@@ -328,9 +328,11 @@ in another.**
 Measured over 2020 exchanges: p50 3.0 ms, p99 3.0 ms, max 49 ms. The timeout is
 now 250 ms -- five times the worst reply ever seen, and 4x cheaper to fail.
 
-The bursts are the device's own behaviour and cannot be fixed from here. What
-matters is the metric the owner would actually see, since the AIO reverts to
-firmware green about ten seconds after its last commit:
+⚠️ **Called "the device's own behaviour" here, and that was wrong.** The bursts
+stopped completely once the report size was corrected -- zero `commander-core`
+events in live streaming since, against roughly one a minute before. They were
+the device's response to being sent 97-byte reports it never asked for. The
+measurements below stand as evidence of the *symptom*, not of a device quirk:
 
 | | |
 |---|---|

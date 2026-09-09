@@ -223,8 +223,10 @@ A property of the shared ambience model, identical on the bulbs. Raise
 **The fans are green.** Nothing is writing to them. Green is the Commander
 Core's firmware fallback about ten seconds after the last commit.
 
-**The fans flash green every minute or so.** A dropped acknowledgement taking the
-sink out of service for longer than the AIO's ten-second memory. Under sustained
+**The fans flash green every minute or so.** Historically: a dropped
+acknowledgement taking the sink out of service for longer than the AIO's
+ten-second memory. In practice this was the wrong report size (see above) and has
+not recurred since; check the report descriptor first. Under sustained
 streaming this controller occasionally fails to answer a continuation packet
 inside the read timeout -- about 0.4% of frames, measured over a twelve-minute
 soak. The endpoint write is retried whole (never packet-by-packet: the sequence

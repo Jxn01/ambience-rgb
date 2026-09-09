@@ -239,10 +239,9 @@ omission.
   single whole-device packet instead. Measured: six per-zone writes stalled
   within 1-2 frames; one whole-device write ran 400 ticks over 80 s clean. A
   device with an *excluded* zone cannot use that path and keeps the risk.
-- **The Commander Core emits unsolicited `0xF0` reports** in bursts of a few
-  seconds, every 25-50 s under sustained streaming. Nothing can be done about it
-  from here: the acknowledgement simply does not arrive while a burst is in
-  progress. The reply timeout is sized (250 ms) so a burst costs frames rather
-  than stalling the single-threaded loop, and the longest measured gap with no
-  successful write is 2.14 s -- inside the ~10 s the device waits before
-  reverting to its firmware pattern, so the fans hold their colour.
+- ~~The Commander Core emits unsolicited `0xF0` reports~~ **-- resolved.** These
+  were the device reacting to 97-byte reports when its descriptor declares 64.
+  Zero occurrences since the report size was corrected. The defences added while
+  chasing them (a 250 ms reply timeout, retrying a whole endpoint write, a short
+  retry backoff) are kept: they are correct on their own terms and cost nothing,
+  but they are no longer load-bearing.

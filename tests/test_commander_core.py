@@ -189,5 +189,53 @@ class ColourSelectionTest(unittest.TestCase):
         self.assertEqual(payload[87 + 3 * PORT_SLOTS * 3 :], bytes(3 * PORT_SLOTS * 3))
 
 
+class SettlingRetryTest(unittest.TestCase):
+    """A controller just released by another process needs a moment.
+
+    Found by the shutdown unit, which opens the device seconds after the daemon
+    closed it and got "returned data type (0, 0)" -- which reads like a protocol
+    mismatch but is timing. Without the retry the AIO silently stayed lit
+    through shutdown and drifted back to firmware green.
+    """
+
+    def test_it_recovers_after_transient_zeroed_reads(self) -> None:
+        fake = FakeHid()
+        original = fake.write
+        state = {"failures": 2}
+
+        def flaky(packet):
+            result = original(packet)
+            if packet[2] == 0x08 and packet[4] == 0x01 and state["failures"] > 0:
+                state["failures"] -= 1
+                reply = bytearray(fake._next[-1])
+                reply[3:5] = b"\x00\x00"          # the zeroed data type
+                fake._next[-1] = bytes(reply)
+            return result
+
+        fake.write = flaky
+        cc = _Opened(fake)
+        counts = cc._wake_and_read_counts(attempts=4, delay=0.0)
+        self.assertEqual(counts, [29, 8, 8, 8, None, None, None])
+        self.assertEqual(state["failures"], 0, "both transient failures were consumed")
+
+    def test_it_gives_up_with_a_clear_message(self) -> None:
+        fake = FakeHid()
+        original = fake.write
+
+        def always_bad(packet):
+            result = original(packet)
+            if packet[2] == 0x08 and packet[4] == 0x01:
+                reply = bytearray(fake._next[-1])
+                reply[3:5] = b"\x00\x00"
+                fake._next[-1] = bytes(reply)
+            return result
+
+        fake.write = always_bad
+        cc = _Opened(fake)
+        with self.assertRaises(CommanderCoreError) as caught:
+            cc._wake_and_read_counts(attempts=2, delay=0.0)
+        self.assertIn("did not become ready", str(caught.exception))
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

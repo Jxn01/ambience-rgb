@@ -111,13 +111,16 @@ class CommanderCore:
         self._path = path
 
         # The controller answers reads with a zeroed data type until it is
-        # woken. Without this, the very first endpoint read fails with
-        # "returned data type (0, 0)" and looks like a protocol mismatch.
-        self._send(CMD_WAKE, CMD_WAKE_DATA)
-
+        # woken -- and for a short while after ANOTHER process has released it,
+        # a wake is not immediately enough either. That second case is not
+        # hypothetical: it is exactly what the shutdown unit hits, opening the
+        # device moments after the daemon has closed it, and it presented as
+        # "returned data type (0, 0)" which reads like a protocol mismatch
+        # rather than a timing one. Retry rather than fail the whole shutdown.
+        #
         # Read the topology BEFORE forcing fan mode: afterwards the controller
         # can report the 34 slots it exposes rather than the LEDs that exist.
-        self.led_counts = self._read_led_counts()
+        self.led_counts = self._wake_and_read_counts()
         self._force_fan_mode()
         self._logger.info(
             "Commander Core open on %s; LED counts %s", path.decode(errors="replace"), self.led_counts
@@ -194,6 +197,27 @@ class CommanderCore:
                 )
 
     # -- operations --------------------------------------------------------
+
+    def _wake_and_read_counts(self, attempts: int = 4, delay: float = 0.25) -> list[int | None]:
+        """Wake the controller and read its topology, retrying a settling device."""
+
+        import time
+
+        last: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                self._send(CMD_WAKE, CMD_WAKE_DATA)
+                return self._read_led_counts()
+            except CommanderCoreError as error:
+                last = error
+                if attempt + 1 < attempts:
+                    self._logger.debug(
+                        "Commander Core not ready (%s); retrying in %.2fs", error, delay
+                    )
+                    time.sleep(delay)
+        raise CommanderCoreError(
+            f"Commander Core did not become ready after {attempts} attempts: {last}"
+        )
 
     def _read_led_counts(self) -> list[int | None]:
         return parse_led_counts(self._read_endpoint(ENDPOINT_LED_COUNT, DATA_TYPE_LED_COUNT))

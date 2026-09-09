@@ -40,6 +40,18 @@ RETRY_SECONDS = 10.0
 # frame, but writing an unchanged colour every tick is what floods the server.
 REFRESH_SECONDS = 2.0
 
+# Smallest per-channel move worth a packet. The ambient colour jitters by a unit
+# or two every frame on a static screen; without this, exact-equality filtering
+# still resends all eleven targets every tick and the server is overrun anyway.
+# Invisible on an LED, and matterlights applies the same idea to the bulbs.
+COLOUR_EPSILON = 6
+
+# How often to measure the server's lag, and the lag that counts as too far
+# behind. Writes are fire-and-forget, so this round trip is the only honest
+# signal; a wedged server is otherwise indistinguishable from a healthy one.
+HEALTH_CHECK_SECONDS = 5.0
+HEALTH_TIMEOUT_SECONDS = 2.0
+
 
 class Sink(Protocol):
     name: str
@@ -105,6 +117,7 @@ class OpenRGBSink:
         self._last_write: dict[str, float] = {}
         # Per-target (device, zone) -> (colour, when it was last sent).
         self._sent: dict[tuple[int, int | None], tuple[RGB, float]] = {}
+        self._checked_at = 0.0
 
     def connect(self) -> None:
         client = OpenRGBClient(
@@ -176,6 +189,7 @@ class OpenRGBSink:
             self.connect()
         assert self._client is not None
         now = time.monotonic()
+        self._check_health(now)
         for device, zone, group, leds, bus in self._targets:
             # Rate-limit per bus. SMBus is shared with sensor reads; the USB
             # devices have no such constraint and get the full rate.
@@ -189,6 +203,29 @@ class OpenRGBSink:
         for bus in {t[4] for t in self._targets}:
             if now - self._last_write.get(bus, 0.0) >= self._interval(bus):
                 self._last_write[bus] = now
+
+    def _check_health(self, now: float) -> None:
+        """Drop the connection when the server has fallen too far behind.
+
+        Reconnecting throws the backlog away, which is exactly right for this
+        stream: every queued packet is a stale frame, and the next tick carries
+        a better one. Without this the daemon cannot tell a wedged server from a
+        healthy one -- it just keeps writing into a buffer nobody drains, and
+        the case shows a colour from minutes ago while every log line is clean.
+        """
+
+        if now - self._checked_at < HEALTH_CHECK_SECONDS:
+            return
+        self._checked_at = now
+        assert self._client is not None
+        try:
+            lag = self._client.round_trip_seconds(HEALTH_TIMEOUT_SECONDS)
+        except OpenRGBError:
+            self._logger.warning("openrgb: server is not answering; dropping the connection")
+            self.close()
+            raise
+        if lag > 0.5:
+            self._logger.info("openrgb: server is %.2fs behind", lag)
 
     def _should_send(self, device: int, zone: int | None, colour: RGB, now: float) -> bool:
         """Whether this target needs the packet, or already shows this colour.
@@ -212,7 +249,9 @@ class OpenRGBSink:
         if previous is None:
             return True
         colour_before, when = previous
-        return colour_before != colour or (now - when) >= REFRESH_SECONDS
+        if (now - when) >= REFRESH_SECONDS:
+            return True
+        return any(abs(a - b) >= COLOUR_EPSILON for a, b in zip(colour, colour_before))
 
     def _send_colour(self, device: int, zone: int | None, colour: RGB, leds: int) -> None:
         assert self._client is not None

@@ -12,15 +12,31 @@ import logging
 import unittest
 
 from linux_rgb.config import parse_config
-from linux_rgb.sinks import REFRESH_SECONDS, OpenRGBSink
+from linux_rgb.openrgb_client import OpenRGBError
+from linux_rgb.sinks import (
+    COLOUR_EPSILON,
+    HEALTH_CHECK_SECONDS,
+    REFRESH_SECONDS,
+    OpenRGBSink,
+)
 
 NEAR = (10, 20, 30)
 FAR = (40, 50, 60)
 
 
 class _FakeClient:
-    def __init__(self) -> None:
+    def __init__(self, lag: float = 0.0, answers: bool = True) -> None:
         self.writes: list[tuple[int, int | None, tuple[int, int, int], int]] = []
+        self.lag = lag
+        self.answers = answers
+        self.probes = 0
+        self.closed = False
+
+    def round_trip_seconds(self, timeout: float) -> float:
+        self.probes += 1
+        if not self.answers:
+            raise OpenRGBError("no answer")
+        return self.lag
 
     def update_leds(self, device, colours) -> None:
         self.writes.append((device, None, colours[0], len(colours)))
@@ -29,7 +45,7 @@ class _FakeClient:
         self.writes.append((device, zone, colours[0], len(colours)))
 
     def close(self) -> None:
-        pass
+        self.closed = True
 
 
 def _sink(targets) -> tuple[OpenRGBSink, _FakeClient]:
@@ -40,6 +56,7 @@ def _sink(targets) -> tuple[OpenRGBSink, _FakeClient]:
     # assertion here into a test of the clock. The limiter is a separate ceiling
     # with its own test below.
     sink._interval = lambda _bus: 0.0  # type: ignore[method-assign]
+    sink._check_health = lambda _now: None  # type: ignore[method-assign]
     client = _FakeClient()
     sink._client = client
     sink._targets = targets
@@ -86,6 +103,24 @@ class ChangeFilterTest(unittest.TestCase):
         sink.write(NEAR, FAR)
         sink.write((99, 99, 99), FAR)
         self.assertEqual([w[2] for w in client.writes], [NEAR, (99, 99, 99)])
+
+    def test_a_jitter_smaller_than_the_epsilon_is_ignored(self) -> None:
+        """🚨 Exact equality is not enough: the ambient colour moves a unit or
+        two every frame, which resent all eleven targets every tick and overran
+        the server just as badly as no filter at all."""
+
+        sink, client = _sink(_ONE)
+        sink.write(NEAR, FAR)
+        nudged = tuple(c + COLOUR_EPSILON - 1 for c in NEAR)
+        sink.write(nudged, FAR)
+        self.assertEqual(len(client.writes), 1)
+
+    def test_a_move_of_the_epsilon_is_sent(self) -> None:
+        sink, client = _sink(_ONE)
+        sink.write(NEAR, FAR)
+        moved = (NEAR[0] + COLOUR_EPSILON, NEAR[1], NEAR[2])
+        sink.write(moved, FAR)
+        self.assertEqual(len(client.writes), 2)
 
     def test_it_refreshes_after_the_window(self) -> None:
         """A re-detected controller must not be left sitting on a stale frame."""
@@ -160,6 +195,67 @@ class BusRateLimitTest(unittest.TestCase):
         sink.write(NEAR, FAR)
         sink.write((99, 99, 99), FAR)  # different colour, but far inside 1/5 s
         self.assertEqual(len(client.writes), 1)
+
+
+class HealthCheckTest(unittest.TestCase):
+    """🚨 A wedged server is invisible without a round trip.
+
+    On loopback our own send queue reads zero while the server sits on hundreds
+    of kilobytes of unread packets -- the bytes just move into its receive
+    buffer. That happened for real: the server stopped reading, every log line
+    stayed clean, and the case froze on an old frame.
+    """
+
+    def setUp(self) -> None:
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    def _sink_with(self, client) -> OpenRGBSink:
+        sink = OpenRGBSink(parse_config({"socket": {"path": "/tmp/x.sock"}}))
+        sink._interval = lambda _bus: 0.0  # type: ignore[method-assign]
+        sink._client = client
+        sink._targets = _ONE
+        return sink
+
+    def test_a_healthy_server_is_probed_and_written_to(self) -> None:
+        client = _FakeClient(lag=0.01)
+        sink = self._sink_with(client)
+        sink.write(NEAR, FAR)
+        self.assertEqual(client.probes, 1)
+        self.assertEqual(len(client.writes), 1)
+
+    def test_it_does_not_probe_on_every_tick(self) -> None:
+        client = _FakeClient(lag=0.01)
+        sink = self._sink_with(client)
+        for _ in range(10):
+            sink.write(NEAR, FAR)
+        self.assertEqual(client.probes, 1)
+
+    def test_it_probes_again_after_the_interval(self) -> None:
+        client = _FakeClient(lag=0.01)
+        sink = self._sink_with(client)
+        sink.write(NEAR, FAR)
+        sink._checked_at -= HEALTH_CHECK_SECONDS + 1
+        sink.write(NEAR, FAR)
+        self.assertEqual(client.probes, 2)
+
+    def test_a_silent_server_drops_the_connection_and_raises(self) -> None:
+        """Reconnecting discards the backlog, which is every stale frame."""
+
+        client = _FakeClient(answers=False)
+        sink = self._sink_with(client)
+        with self.assertRaises(OpenRGBError):
+            sink.write(NEAR, FAR)
+        self.assertTrue(client.closed)
+        self.assertIsNone(sink._client)
+
+    def test_the_resilient_wrapper_absorbs_that_and_retries(self) -> None:
+        from linux_rgb.sinks import ResilientSink
+
+        client = _FakeClient(answers=False)
+        wrapped = ResilientSink(self._sink_with(client))
+        self.assertFalse(wrapped.write(NEAR, FAR))
+        self.assertTrue(wrapped.degraded)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import socket
 import struct
+import time
 
 LOGGER = logging.getLogger("linux_rgb.openrgb")
 
@@ -290,6 +291,38 @@ class OpenRGBClient:
         """
 
         self._send(device, CMD_SET_CUSTOM_MODE)
+
+    def round_trip_seconds(self, timeout: float) -> float:
+        """Time a request/reply, which measures how far behind the server is.
+
+        🚨 **The only honest backpressure signal available.** Writes are
+        fire-and-forget and, on loopback, our own send queue reads zero even
+        while the server has hundreds of kilobytes of our packets unread -- the
+        bytes simply move into its receive buffer. Locally everything looks
+        perfect right up until the lights are minutes stale.
+
+        A reply is queued behind every packet already sent, so the time it takes
+        to come back IS the backlog, in seconds. Raises when the server does not
+        answer inside ``timeout``.
+        """
+
+        if self._socket is None:
+            raise OpenRGBError("Not connected")
+        started = time.monotonic()
+        previous = self._socket.gettimeout()
+        self._socket.settimeout(timeout)
+        try:
+            self._send(0, CMD_REQUEST_CONTROLLER_COUNT)
+            self._receive()
+        except (OSError, OpenRGBError) as error:
+            raise OpenRGBError(
+                f"The OpenRGB server did not answer within {timeout:.1f}s ({error}); "
+                "it is wedged or far behind"
+            ) from error
+        finally:
+            if self._socket is not None:
+                self._socket.settimeout(previous)
+        return time.monotonic() - started
 
     def update_mode(self, device: int, mode: Mode) -> None:
         """Write a mode to the DEVICE. This is the call that changes hardware.

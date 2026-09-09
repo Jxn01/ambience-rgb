@@ -172,14 +172,34 @@ be *told*, and until they are they cycle their firmware pattern while accepting
 and discarding every colour. `set_direct_mode` sends `UPDATE_MODE` (1101) with
 the mode echoed back verbatim.
 
+**Everything is frozen on an old colour and the logs are clean.** The OpenRGB
+server has stopped reading its socket. It can wedge with a client's packets
+unread and near-zero CPU, leaking `CLOSE-WAIT` connections with large receive
+queues (`ss -tnp | grep 6742` shows them). The daemon now detects this itself —
+it times a request/reply every 5 s and drops the connection when the server does
+not answer within 2 s — but a wedged server usually needs
+`systemctl --user restart linux-rgb-openrgb`.
+
+⚠️ **Restarting the server resets every device to whatever it reports, including
+the excluded Keychron**, which goes dark rather than staying white. Direct mode
+does not persist. Put it back with `linux-rgb`'s client or the OpenRGB GUI; a
+white that survives needs the keyboard's own onboard mode.
+
 **Colours are stale — the case lags the screen by seconds or shows an old
 frame.** The write side is fire-and-forget: `sendall` returns in microseconds
 regardless of what the server does with the bytes, so overrunning it is
 invisible from here. Writing every target every tick offered the server ~43
 packets a second against real USB and SMBus devices; it drained them far slower
-and the backlog grew without bound. The sink now sends only what changed, with a
-2 s refresh. If you raise `usb_hz` or add targets, that budget is what you are
-spending.
+and the backlog grew without bound. The sink sends only what
+changed — by at least `COLOUR_EPSILON` per channel, because the ambient colour
+jitters a unit or two every frame and exact equality still resent everything —
+with a 2 s refresh. If you raise `usb_hz` or add targets, that budget is what
+you are spending.
+
+⚠️ **You cannot see this backlog locally.** On loopback our send queue reads
+zero while the server sits on hundreds of kilobytes unread: the bytes just move
+into its receive buffer. `ss -tnp | grep 6742` and read the *server* side's
+Recv-Q; if it grows, we are overrunning it.
 
 **Everything is white.** Expected on a greyscale screen: it is above the dark
 cutoff but carries no saturation, so it normalises to white at full brightness.

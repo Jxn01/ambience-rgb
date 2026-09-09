@@ -147,6 +147,17 @@ Protocol details are in `commander_protocol.py`, tested byte-for-byte because
 the lighting endpoint is **write-only**: a wrong offset produces no error, just
 the wrong LEDs.
 
+🚨 **The report size is 64 bytes, and it is the first thing to check if the AIO
+goes dark while everything reports healthy.** The four-byte command header
+survives a wrong report size, so commands still acknowledge, LED counts still
+read back and the topology still looks right -- while the colour payload is
+truncated and the LEDs never light. Read it from the device, never assume it:
+
+```bash
+od -An -tx1 /sys/class/hidraw/hidraw20/device/report_descriptor
+# 75 08 96 40 00  ->  Report Size 8 bits x Report Count 0x0040 = 64 bytes
+```
+
 ⚠️ **Exactly one process may hold a HID device.** OpenRGB's detector for the
 Commander Core must stay disabled or the two fight over `/dev/hidraw20`, and the
 symptoms are silent — zones reading as size 0, colours that never apply, no

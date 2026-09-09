@@ -373,6 +373,52 @@ commit and had not changed since the night it first worked), so the fault had to
 be in *when* we wrote rather than *what* -- and the only code that wrote without
 being asked to was the failure path.
 
+### 🚨🚨 The report size: why the AIO never lit, and why nothing could tell us
+
+**The device's reports are 64 bytes. We were sending 97.**
+
+Its own HID report descriptor says so -- `75 08 96 40 00`, Report Size 8 bits x
+Report Count `0x0040` -- and OpenRGB agrees, selecting `PACKET_SIZE_V3 = 65` for
+PID `0x0C32`, being those 64 bytes plus hidapi's report-id byte.
+
+**The failure is silent by construction, and that is the whole story.** The
+four-byte command header sits at the front of every packet, so it always arrived
+intact. Every command was acknowledged. LED counts read back correctly. The
+topology was right. The transport reported perfect health for an entire session.
+Only the colour payload -- which lives *past* the header and spans many packets
+-- was cut off past byte 64. No readback can see that. Only the hardware can, by
+staying dark.
+
+It also explains the shape that looked so strange:
+
+| Observed | Why |
+|---|---|
+| daemon running -> AIO **dark** | wake and fan-mode DO work, so it leaves its firmware effect and waits for direct colour that never arrives |
+| daemon stopped -> AIO **rainbow** | nothing driving it, so it times out back to hardware mode |
+| commands ACK, counts correct | the header always fit in 64 bytes |
+
+Confirmed on the hardware: a five-phase colour sequence that showed *nothing*
+before the change produced red, blue, green and white on cue after it.
+
+### What this cost, and the lesson
+
+Six earlier findings this session were real bugs, and every one of them was found
+while chasing this one's symptoms. The `0xF0` bursts, the recovery path blacking
+the device, the 1000 ms timeout stalling the loop -- all genuine, all fixed, none
+of them the reason the lights were off.
+
+**Four separate readbacks said "healthy" while the device sat dark**, and the
+answer was in `/sys/class/hidraw/*/device/report_descriptor` the whole time.
+
+> Ask the device what shape it expects before auditing your implementation of the
+> shape you assumed.
+
+The owner's observations were what broke it open, twice: *"the gpu is rotating
+between colours"* found the mode bug, and *"it lit up with white for a second,
+then dark, then the rainbow"* -- reported precisely, and initially argued with --
+was the evidence that the device was entering software mode and then receiving
+nothing usable.
+
 ## Deliberately not done
 
 - **Custom colours and patterns** drive the bulbs only; the RGB goes black in

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linux-rgb"
+version = "1.0.0"
+description = "Ambient screen-to-light sync for the RGB hardware in jxn-garuda"
+requires-python = ">=3.11"
+dependencies = ["hid"]
+
+[project.scripts]
+linux-rgb = "linux_rgb.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

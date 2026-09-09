@@ -8,7 +8,7 @@ happened, including the parts that went wrong.
 
 | | |
 |---|---|
-| `linux-rgb` | 137 tests, private repo, pushed |
+| `linux-rgb` | 140 tests, private repo, pushed |
 | `matterlights` | publisher + master-off publishing + LED rendering, 227 tests, pushed |
 | LEDs driven | **207** across 7 controllers |
 | Verified live | capture → bulbs → socket → OpenRGB + AIO, on real hardware |
@@ -344,6 +344,34 @@ flashing.
 reported as fixed on the strength of zero failures so far. The failures were
 simply clustered later; the final tally was the same rate as before. Reporting
 an in-progress measurement as a result is how a regression gets called a fix.
+
+### 🚨 The recovery path was turning the AIO off
+
+Reported as *"the commander still doesn't light up"* while every other device
+tracked the screen correctly.
+
+`close()` blacks the device before dropping the handle, which is right for a
+clean shutdown -- the controller has no off state, so going dark has to be an
+explicit write. The failure path called the same method. So every transient
+failure **explicitly darkened the hardware it was trying to rescue**, then
+reopened it. With the `0xF0` bursts arriving every ~25 seconds, the AIO spent
+its life being blacked and reopened.
+
+Letting go of a broken handle and shutting down cleanly are different
+operations that happened to share a name. They are now `release()` and
+`close()`, and the failure path calls `release()`.
+
+⚠️ **This was self-inflicted, and introduced the same day as the recovery
+mechanism it lived in.** The mechanism was right -- a dead handle must not be
+reused -- and the fix for it reached for the only method that dropped a handle
+without checking what else that method did. Three tests now pin it: a release
+puts nothing on the wire, a release is idempotent, and `close()` still blacks.
+
+The route to it was the owner's own observation. The protocol had been exonerated
+by then (a hand-driven write lit the device on demand, and the wire format has one
+commit and had not changed since the night it first worked), so the fault had to
+be in *when* we wrote rather than *what* -- and the only code that wrote without
+being asked to was the failure path.
 
 ## Deliberately not done
 

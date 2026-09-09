@@ -91,7 +91,7 @@ def released_on_failure(sink) -> Iterator[None]:
         yield
     except Exception:
         try:
-            sink.close()
+            sink.release()
         except Exception:  # noqa: BLE001 - the original failure is the news
             pass
         raise
@@ -102,6 +102,7 @@ class Sink(Protocol):
 
     def write(self, near: RGB, far: RGB) -> None: ...
     def black(self) -> None: ...
+    def release(self) -> None: ...
     def close(self) -> None: ...
 
 
@@ -145,6 +146,12 @@ class ResilientSink:
 
     def black(self) -> bool:
         return self._guard("black", self._sink.black)
+
+    def release(self) -> None:
+        try:
+            self._sink.release()
+        except Exception:  # noqa: BLE001 - releasing must not raise
+            self._logger.debug("%s: release failed", self.name, exc_info=True)
 
     def close(self) -> None:
         try:
@@ -405,6 +412,11 @@ class OpenRGBSink:
             for device, segments, _bus, per_zone in self._targets:
                 self._send_colours(device, segments, per_zone, (0, 0, 0), (0, 0, 0))
 
+    def release(self) -> None:
+        """Same as close() here: this sink writes nothing on the way out."""
+
+        self.close()
+
     def close(self) -> None:
         if self._client is not None:
             self._client.close()
@@ -441,6 +453,13 @@ class CommanderCoreSink:
         assert self._device is not None
         with released_on_failure(self):
             self._device.black()
+
+    def release(self) -> None:
+        """Drop the handle without blacking it -- see CommanderCore.release."""
+
+        if self._device is not None:
+            self._device.release()
+            self._device = None
 
     def close(self) -> None:
         if self._device is not None:

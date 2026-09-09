@@ -454,3 +454,40 @@ class ReadTimeoutBudgetTest(unittest.TestCase):
 
         worst_case_seconds = 3 * _READ_TIMEOUT_MS / 1000
         self.assertLess(worst_case_seconds, 1.0)
+
+
+class ReleaseDoesNotBlackTest(unittest.TestCase):
+    """🚨 Letting go of a broken handle must not turn the hardware off.
+
+    close() blacks the device first, which is right for a clean shutdown. The
+    recovery path called it too -- so every transient failure explicitly
+    darkened the AIO it was trying to rescue, then reopened it. With this
+    controller's 0xF0 bursts arriving every ~25 s, the device spent its life
+    being blacked, and the owner reported simply that "the commander doesn't
+    light up".
+    """
+
+    def test_release_writes_nothing(self) -> None:
+        fake = FakeHid()
+        cc = _Opened(fake)
+        cc.led_counts = [29, 8, 8, 8, None, None, None]
+        fake.written.clear()
+        cc.release()
+        self.assertTrue(fake.closed, "the handle must still be dropped")
+        self.assertEqual(fake.written, [], "a release must put nothing on the wire")
+
+    def test_release_is_idempotent(self) -> None:
+        fake = FakeHid()
+        cc = _Opened(fake)
+        cc.release()
+        cc.release()  # must not raise
+
+    def test_close_still_blacks(self) -> None:
+        """The guard must not have disabled the behaviour it guards."""
+
+        fake = FakeHid()
+        cc = _Opened(fake)
+        cc.led_counts = [29, 8, 8, 8, None, None, None]
+        fake.written.clear()
+        cc.close()
+        self.assertTrue([p for p in fake.written if p[2] == 0x06], "close() must write black")

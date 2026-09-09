@@ -440,6 +440,10 @@ class ReleaseOnFailureTest(unittest.TestCase):
 
         def __init__(self) -> None:
             self.closed = 0
+            self.released = 0
+
+        def release(self) -> None:
+            self.released += 1
 
         def close(self) -> None:
             self.closed += 1
@@ -451,7 +455,8 @@ class ReleaseOnFailureTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             with released_on_failure(sink):
                 raise ValueError("device fell off the bus")
-        self.assertEqual(sink.closed, 1)
+        self.assertEqual(sink.released, 1)
+        self.assertEqual(sink.closed, 0, "🚨 close() writes black; a failure must not")
 
     def test_it_does_nothing_on_success(self) -> None:
         from linux_rgb.sinks import released_on_failure
@@ -459,14 +464,15 @@ class ReleaseOnFailureTest(unittest.TestCase):
         sink = self._Sink()
         with released_on_failure(sink):
             pass
+        self.assertEqual(sink.released, 0)
         self.assertEqual(sink.closed, 0)
 
     def test_a_failing_close_does_not_mask_the_real_error(self) -> None:
         from linux_rgb.sinks import released_on_failure
 
         class Exploding(self._Sink):
-            def close(self) -> None:
-                raise RuntimeError("close also broken")
+            def release(self) -> None:
+                raise RuntimeError("release also broken")
 
         with self.assertRaises(ValueError):
             with released_on_failure(Exploding()):
@@ -477,14 +483,20 @@ class ReleaseOnFailureTest(unittest.TestCase):
         from linux_rgb.sinks import CommanderCoreSink
 
         class Dead:
+            blacked = 0
+
             def set_colour(self, pump, fans):
                 raise RuntimeError("Reply 0x01 does not acknowledge command 0x07")
 
             def black(self):
+                type(self).blacked += 1
                 raise RuntimeError("gone")
 
+            def release(self):
+                self.released = True
+
             def close(self):
-                self.closed = True
+                self.black()
 
         sink = CommanderCoreSink(parse_config({"socket": {"path": "/tmp/x.sock"}}).commander)
         sink._device = Dead()
@@ -500,8 +512,11 @@ class ReleaseOnFailureTest(unittest.TestCase):
             def black(self):
                 raise RuntimeError("gone")
 
+            def release(self):
+                self.released = True
+
             def close(self):
-                self.closed = True
+                self.black()
 
         sink = CommanderCoreSink(parse_config({"socket": {"path": "/tmp/x.sock"}}).commander)
         sink._device = Dead()

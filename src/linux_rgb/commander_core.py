@@ -155,6 +155,25 @@ class CommanderCore:
         )
         return self
 
+    def release(self) -> None:
+        """Drop the handle WITHOUT writing anything.
+
+        🚨 **Not the same as close(), and confusing the two turns the AIO off.**
+        close() blacks the device first, which is right for a clean shutdown and
+        badly wrong when the reason we are letting go is that an operation just
+        failed: the recovery path then explicitly darkens the hardware it is
+        trying to rescue. With this controller's ``0xF0`` bursts arriving every
+        25 seconds or so, that meant the AIO spent its life being blacked and
+        reopened, and read as "the Commander never lights up".
+        """
+
+        if self._device is None:
+            return
+        try:
+            self._device.close()
+        finally:
+            self._device = None
+
     def close(self) -> None:
         """Release the device, blacking it first unless this is a read-only open.
 

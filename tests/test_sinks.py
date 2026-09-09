@@ -508,3 +508,50 @@ class ReleaseOnFailureTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             sink.black()
         self.assertIsNone(sink._device)
+
+
+class CommanderWritesEveryTickTest(unittest.TestCase):
+    """🚨 The Commander Core must be written on EVERY tick, unfiltered.
+
+    It has no off state and no memory: about ten seconds after the last commit
+    it reverts to its firmware pattern, which on this rig is green fans. The
+    change filter that makes the OpenRGB sink cheap would therefore turn the AIO
+    green on any static screen. This test exists so that "why does this one
+    resend the same colour?" is answered before someone optimises it.
+    """
+
+    class _Device:
+        def __init__(self) -> None:
+            self.colours: list[tuple] = []
+
+        def set_colour(self, pump, fans) -> None:
+            self.colours.append((pump, fans))
+
+        def black(self) -> None:
+            self.colours.append(((0, 0, 0), (0, 0, 0)))
+
+        def close(self) -> None:
+            pass
+
+    def _sink(self):
+        from linux_rgb.config import parse_config
+        from linux_rgb.sinks import CommanderCoreSink
+
+        sink = CommanderCoreSink(parse_config({"socket": {"path": "/tmp/x.sock"}}).commander)
+        device = self._Device()
+        sink._device = device
+        return sink, device
+
+    def test_an_unchanged_colour_is_still_sent_every_time(self) -> None:
+        sink, device = self._sink()
+        for _ in range(10):
+            sink.write(NEAR, FAR)
+        self.assertEqual(len(device.colours), 10, "filtering this would let the fans go green")
+
+    def test_black_is_also_sent_every_time(self) -> None:
+        """"Off" is a colour you keep writing, not a state the device holds."""
+
+        sink, device = self._sink()
+        for _ in range(5):
+            sink.black()
+        self.assertEqual(len(device.colours), 5)

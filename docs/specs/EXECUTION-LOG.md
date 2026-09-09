@@ -61,6 +61,24 @@ while the AIO had in fact been left lit**, to drift back to firmware green a few
 seconds later. The isolation was right; trusting its success message was not.
 Found only by exercising the layer through systemd rather than by hand.
 
+### 🚨 A 0 ms HID timeout BLOCKS, and cost the most time of anything here
+
+Under sustained streaming the controller's replies drifted one behind and the
+acknowledgement check started rejecting good packets. The fix is what liquidctl
+does — clear enqueued reports before every command — but the obvious way to
+write that, `read(n, 0)` in a loop, **hung the daemon outright**: in
+cython-hidapi a 0 ms timeout means *blocking*, not *poll*.
+
+It cost a wedged process and two wrong diagnoses (an unbounded loop, then a
+settling problem) before the sequence was instrumented and measured, at which
+point it was unambiguous: `read(n, 1)` returns empty in 0.001 s, `read(n, 0)`
+never returns. Both the non-zero timeout and the loop bound are asserted by
+tests now, because either one alone is still a hang.
+
+The wider lesson repeated from earlier in the session: **when a process hangs,
+instrument the sequence rather than reasoning about which line is guilty.** Both
+wrong guesses were plausible and both were wrong.
+
 ### 🚨 A server can answer before it knows anything
 
 The OpenRGB server binds its socket several seconds before device detection

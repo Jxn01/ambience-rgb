@@ -230,5 +230,19 @@ omission.
 - Ambient mode only. Custom colours and patterns drive the bulbs but not RGB.
 - Greyscale content produces white at full brightness — a property of the shared
   ambience model, identical on the bulbs, not introduced here.
-- Requires a running `openrgb --server`; if it dies, OpenRGB devices freeze on
-  their last frame until it returns. The Commander Core is unaffected.
+- Requires a running `openrgb --server`. If it dies the daemon notices, drops
+  the connection and reconnects on its own -- measured at 11 s from restart to
+  driving again -- so the devices go black briefly rather than freezing. The
+  Commander Core is unaffected either way; it has its own driver.
+- **The per-zone write path stalls OpenRGB's ASRock controller.** Zones are
+  contiguous ranges of one LED array, so every split controller is written as a
+  single whole-device packet instead. Measured: six per-zone writes stalled
+  within 1-2 frames; one whole-device write ran 400 ticks over 80 s clean. A
+  device with an *excluded* zone cannot use that path and keeps the risk.
+- **The Commander Core emits unsolicited `0xF0` reports** in bursts of a few
+  seconds, every 25-50 s under sustained streaming. Nothing can be done about it
+  from here: the acknowledgement simply does not arrive while a burst is in
+  progress. The reply timeout is sized (250 ms) so a burst costs frames rather
+  than stalling the single-threaded loop, and the longest measured gap with no
+  successful write is 2.14 s -- inside the ~10 s the device waits before
+  reverting to its firmware pattern, so the fans hold their colour.

@@ -279,13 +279,18 @@ class CommanderCore:
     def _write_endpoint(self, endpoint, data_type, data: bytes, attempts: int = 3) -> None:
         """Write one endpoint, retrying the WHOLE sequence on a transient miss.
 
-        🚨 **A dropped acknowledgement is not a broken device.** Under sustained
-        streaming this controller occasionally fails to answer a continuation
-        packet inside the read timeout -- measured at roughly 0.4% of frames, or
-        one every 45 seconds at 5 Hz. Left to propagate, each miss took the sink
-        out for its retry window, and since the AIO reverts to its firmware
-        pattern about ten seconds after the last commit, that is long enough for
-        the fans to visibly flash green.
+        **A dropped acknowledgement is not a broken device.** Left to propagate,
+        a single miss takes the sink out for its retry window, and since the AIO
+        reverts to its firmware pattern about ten seconds after the last commit,
+        that is long enough for the fans to visibly flash.
+
+        ⚠️ **This no longer fires, and the reason is worth keeping.** It was
+        written when the controller was dropping acknowledgements every 25-50 s
+        under load -- which was not device behaviour at all, but its reaction to
+        being sent 97-byte reports when its descriptor declares 64. A 300-second
+        streaming run since measured **1312 endpoint writes and 0 retries**. It
+        is kept because it is correct on its own terms and costs nothing when it
+        never triggers; it is not load-bearing.
 
         The retry restarts the whole endpoint write rather than resending the
         packet that failed, because the sequence is a transaction: open, write

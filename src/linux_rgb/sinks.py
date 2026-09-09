@@ -59,13 +59,17 @@ COLOUR_EPSILON = 6
 HEALTH_CHECK_SECONDS = 5.0
 HEALTH_TIMEOUT_SECONDS = 5.0
 
-# ⚠️ Deliberately tolerant. A healthy server answers in well under 3 ms, so it
-# is tempting to reconnect after one or two misses -- but this server also goes
-# quiet for tens of seconds at a time under load while STILL APPLYING the writes
-# we send it, so an eager check reconnects every ~20 s for nothing and each
-# reconnect costs a full re-push. A genuine wedge never answers again, so it
-# trips this anyway; it just takes half a minute longer to say so.
-HEALTH_FAILURES_BEFORE_RECONNECT = 6
+# Consecutive unanswered probes before the connection is dropped.
+#
+# This was 6, tuned when the server appeared to go quiet for tens of seconds at a
+# time under load. That turned out not to be the server: the daemon's own loop
+# was being stalled by a 1000 ms HID read timeout, and the per-zone write path
+# was stalling OpenRGB's ASRock controller. With both fixed, a 300-second
+# streaming run measured **60 health checks and 0 misses**, so 6 was simply
+# slow to notice a real wedge -- half a minute of stale colour before acting.
+#
+# 3 tolerates a genuine hiccup and still reports a wedged server in ~15 s.
+HEALTH_FAILURES_BEFORE_RECONNECT = 3
 
 
 @contextmanager

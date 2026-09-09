@@ -8,7 +8,7 @@ happened, including the parts that went wrong.
 
 | | |
 |---|---|
-| `linux-rgb` | 140 tests, private repo, pushed |
+| `linux-rgb` | 140 unit tests + 4 integration checks, private repo, pushed |
 | `matterlights` | publisher + master-off publishing + LED rendering, 227 tests, pushed |
 | LEDs driven | **207** across 7 controllers |
 | Verified live | capture → bulbs → socket → OpenRGB + AIO, on real hardware |
@@ -420,6 +420,33 @@ between colours"* found the mode bug, and *"it lit up with white for a second,
 then dark, then the rainbow"* -- reported precisely, and initially argued with --
 was the evidence that the device was entering software mode and then receiving
 nothing usable.
+
+## Afterwards: retiring the scaffolding
+
+With the root cause fixed, the defences built while chasing its symptoms were
+measured rather than left in place on faith. A 300-second streaming run:
+
+| | |
+|---|---|
+| HID exchanges | 18,364 |
+| endpoint writes | 1,312 |
+| **retries fired** | **0** |
+| health checks | 60 |
+| **health misses** | **0** |
+
+So the endpoint-write retry is kept but documented as not load-bearing, and the
+health check's tolerance came *down* from 6 consecutive misses to 3. Six was
+tuned for a server that seemed to go quiet for tens of seconds -- which was never
+the server, but our own loop stalling on a 1000 ms HID timeout and the per-zone
+path stalling OpenRGB. At 0 misses in 60, six only meant half a minute of stale
+colour before a real wedge was noticed.
+
+The four harnesses that found the session's bugs moved out of the scratchpad into
+`tests/integration/`, named `check_*.py` so unit discovery leaves them alone.
+`check_hardware.py` is the important one: **the only check in the repository that
+can fail for the reason that cost a day**, because it asks a person rather than
+asking software about software. Its failure path prints the report-descriptor
+command instead of leaving the next person to rediscover it.
 
 ## Deliberately not done
 

@@ -50,7 +50,15 @@ COLOUR_EPSILON = 6
 # behind. Writes are fire-and-forget, so this round trip is the only honest
 # signal; a wedged server is otherwise indistinguishable from a healthy one.
 HEALTH_CHECK_SECONDS = 5.0
-HEALTH_TIMEOUT_SECONDS = 2.0
+HEALTH_TIMEOUT_SECONDS = 5.0
+
+# ⚠️ Deliberately tolerant. A healthy server answers in well under 3 ms, so it
+# is tempting to reconnect after one or two misses -- but this server also goes
+# quiet for tens of seconds at a time under load while STILL APPLYING the writes
+# we send it, so an eager check reconnects every ~20 s for nothing and each
+# reconnect costs a full re-push. A genuine wedge never answers again, so it
+# trips this anyway; it just takes half a minute longer to say so.
+HEALTH_FAILURES_BEFORE_RECONNECT = 6
 
 
 class Sink(Protocol):
@@ -118,6 +126,7 @@ class OpenRGBSink:
         # Per-target (device, zone) -> (colour, when it was last sent).
         self._sent: dict[tuple[int, int | None], tuple[RGB, float]] = {}
         self._checked_at = 0.0
+        self._health_failures = 0
 
     def connect(self) -> None:
         client = OpenRGBClient(
@@ -221,9 +230,24 @@ class OpenRGBSink:
         try:
             lag = self._client.round_trip_seconds(HEALTH_TIMEOUT_SECONDS)
         except OpenRGBError:
-            self._logger.warning("openrgb: server is not answering; dropping the connection")
+            self._health_failures += 1
+            if self._health_failures < HEALTH_FAILURES_BEFORE_RECONNECT:
+                # Writes continue through this: an unanswered probe means the
+                # server is slow to TALK, not that it has stopped applying
+                # colours, and the lights are the point.
+                self._logger.debug(
+                    "openrgb: no reply to check %d; still writing", self._health_failures
+                )
+                return
+            self._logger.warning(
+                "openrgb: server has not answered %d checks; dropping the connection. "
+                "If this repeats, the server is wedged: "
+                "systemctl --user restart linux-rgb-openrgb",
+                self._health_failures,
+            )
             self.close()
             raise
+        self._health_failures = 0
         if lag > 0.5:
             self._logger.info("openrgb: server is %.2fs behind", lag)
 

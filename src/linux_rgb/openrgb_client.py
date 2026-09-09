@@ -38,6 +38,7 @@ PROTOCOL_VERSION = 3
 
 CMD_REQUEST_CONTROLLER_COUNT = 0
 CMD_REQUEST_CONTROLLER_DATA = 1
+CMD_REQUEST_PROTOCOL_VERSION = 40
 CMD_SET_CLIENT_NAME = 50
 CMD_UPDATE_LEDS = 1050
 CMD_UPDATE_ZONE_LEDS = 1051
@@ -196,6 +197,7 @@ class OpenRGBClient:
         self._name = name
         self._timeout = timeout
         self._logger = logger or LOGGER
+        self.protocol_version = PROTOCOL_VERSION
         self._socket: socket.socket | None = None
         self.controllers: list[Controller] = []
 
@@ -210,6 +212,17 @@ class OpenRGBClient:
                 "Is matterlights-openrgb.service running?"
             ) from error
         self._send(0, CMD_SET_CLIENT_NAME, self._name.encode() + b"\x00")
+        self.protocol_version = self._negotiate_protocol()
+        if self.protocol_version < PROTOCOL_VERSION:
+            # parse_controller decodes the version-3 record layout and nothing
+            # else. Reading an older one would not fail -- it would shift every
+            # zone and LED count after the mode block and look like a device
+            # with the wrong number of LEDs.
+            self.close()
+            raise OpenRGBError(
+                f"The OpenRGB server speaks protocol {self.protocol_version}; "
+                f"this client needs {PROTOCOL_VERSION}. Upgrade OpenRGB."
+            )
         self.controllers = self._read_controllers()
         self._logger.info(
             "OpenRGB: %d controllers (%s)",
@@ -265,12 +278,52 @@ class OpenRGBClient:
             chunks += chunk
         return chunks
 
+    def _negotiate_protocol(self) -> int:
+        """Agree a protocol version with the server, and remember it.
+
+        🚨 **Skipping this desyncs the connection the moment you write a mode.**
+        The server keeps a protocol version *per client* and defaults it to 0
+        until this handshake happens. Asking for a controller description at
+        version 3 still returns a version-3 record -- that request carries its
+        own version -- so everything looks fine. But an ``UPDATE_MODE`` written
+        back is parsed at the client's *stored* version: at 0 the server reads
+        8 bytes fewer than we sent (the brightness fields), and the leftovers
+        become the header of the next packet.
+
+        The connection then never recovers. The server sits waiting for a
+        payload length it invented, our packets pile up unread -- 238 kB of them
+        were measured -- and every reply we wait for never comes, while other
+        clients are served normally at 0.1 ms. It presents as "the OpenRGB
+        server is wedged", and it is not: only our stream is.
+
+        Every description is requested at the negotiated version and every mode
+        echoed back at the same one, so the two cannot drift apart.
+        """
+
+        assert self._socket is not None
+        previous = self._socket.gettimeout()
+        self._socket.settimeout(2.0)
+        try:
+            self._send(0, CMD_REQUEST_PROTOCOL_VERSION, struct.pack("<I", PROTOCOL_VERSION))
+            (server_version,) = struct.unpack("<I", self._receive())
+        except (OSError, OpenRGBError, struct.error):
+            # A server too old to know the request answers nothing. Version 0 is
+            # then the truth, and honouring it keeps us in step with it.
+            self._logger.info("OpenRGB: no protocol handshake; assuming version 0")
+            return 0
+        finally:
+            if self._socket is not None:
+                self._socket.settimeout(previous)
+        agreed = min(PROTOCOL_VERSION, server_version)
+        self._logger.debug("OpenRGB: protocol %d (server offered %d)", agreed, server_version)
+        return agreed
+
     def _read_controllers(self) -> list[Controller]:
         self._send(0, CMD_REQUEST_CONTROLLER_COUNT)
         (count,) = struct.unpack("<I", self._receive())
         controllers = []
         for index in range(count):
-            self._send(index, CMD_REQUEST_CONTROLLER_DATA, struct.pack("<I", PROTOCOL_VERSION))
+            self._send(index, CMD_REQUEST_CONTROLLER_DATA, struct.pack("<I", self.protocol_version))
             controllers.append(parse_controller(index, self._receive()))
         return controllers
 

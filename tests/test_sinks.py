@@ -16,6 +16,7 @@ from linux_rgb.openrgb_client import OpenRGBError
 from linux_rgb.sinks import (
     COLOUR_EPSILON,
     HEALTH_CHECK_SECONDS,
+    HEALTH_FAILURES_BEFORE_RECONNECT,
     REFRESH_SECONDS,
     OpenRGBSink,
 )
@@ -239,21 +240,47 @@ class HealthCheckTest(unittest.TestCase):
         sink.write(NEAR, FAR)
         self.assertEqual(client.probes, 2)
 
+    def test_one_slow_reply_is_tolerated(self) -> None:
+        """A healthy server answers in under 3 ms; dropping the connection over
+        a single hiccup costs a visible blip for nothing."""
+
+        client = _FakeClient(answers=False)
+        sink = self._sink_with(client)
+        sink.write(NEAR, FAR)  # must not raise
+        self.assertFalse(client.closed)
+        self.assertIsNotNone(sink._client)
+
     def test_a_silent_server_drops_the_connection_and_raises(self) -> None:
         """Reconnecting discards the backlog, which is every stale frame."""
 
         client = _FakeClient(answers=False)
         sink = self._sink_with(client)
-        with self.assertRaises(OpenRGBError):
-            sink.write(NEAR, FAR)
+        for _ in range(HEALTH_FAILURES_BEFORE_RECONNECT):
+            sink._checked_at = 0.0
+            try:
+                sink.write(NEAR, FAR)
+            except OpenRGBError:
+                break
         self.assertTrue(client.closed)
         self.assertIsNone(sink._client)
+
+    def test_a_recovered_server_clears_the_failure_count(self) -> None:
+        client = _FakeClient(answers=False)
+        sink = self._sink_with(client)
+        sink.write(NEAR, FAR)
+        self.assertEqual(sink._health_failures, 1)
+        client.answers = True
+        sink._checked_at = 0.0
+        sink.write(NEAR, FAR)
+        self.assertEqual(sink._health_failures, 0)
 
     def test_the_resilient_wrapper_absorbs_that_and_retries(self) -> None:
         from linux_rgb.sinks import ResilientSink
 
         client = _FakeClient(answers=False)
-        wrapped = ResilientSink(self._sink_with(client))
+        sink = self._sink_with(client)
+        sink._health_failures = HEALTH_FAILURES_BEFORE_RECONNECT - 1
+        wrapped = ResilientSink(sink)
         self.assertFalse(wrapped.write(NEAR, FAR))
         self.assertTrue(wrapped.degraded)
 

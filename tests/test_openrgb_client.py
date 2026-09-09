@@ -8,15 +8,19 @@ sending a packet that never reaches the device.
 
 from __future__ import annotations
 
+import socket
 import struct
 import unittest
 
 from linux_rgb.openrgb_client import (
+    CMD_REQUEST_PROTOCOL_VERSION,
     CMD_SET_CUSTOM_MODE,
     CMD_UPDATE_MODE,
     Controller,
     Mode,
+    PROTOCOL_VERSION,
     OpenRGBClient,
+    OpenRGBError,
     parse_controller,
 )
 
@@ -162,6 +166,57 @@ class DirectModeTest(unittest.TestCase):
         self.assertEqual((device, command), (3, CMD_UPDATE_MODE))
         self.assertEqual(struct.unpack_from("<i", payload, 4)[0], 7)
         self.assertEqual(payload[8:], b"\x01\x02\x03")
+
+
+class ProtocolNegotiationTest(unittest.TestCase):
+    """🚨 The server keeps a protocol version PER CLIENT, defaulting to 0.
+
+    Descriptions still come back at whatever version the *request* asks for, so
+    skipping the handshake looks harmless -- right up until a mode is written
+    back, which the server parses at the version it believes we speak. Read at
+    version 0, a version-3 mode block is 8 bytes longer than expected and the
+    remainder becomes the next packet's header. The connection never recovers
+    and it presents as "the OpenRGB server is wedged", while other clients are
+    served normally.
+    """
+
+    class _Client(OpenRGBClient):
+        def __init__(self, reply: bytes | None) -> None:
+            super().__init__("127.0.0.1", 6742)
+            self.reply = reply
+            self.sent: list[tuple[int, int, bytes]] = []
+
+        def _send(self, device, command, payload=b"") -> None:  # type: ignore[override]
+            self.sent.append((device, command, payload))
+
+        def _receive(self) -> bytes:  # type: ignore[override]
+            if self.reply is None:
+                raise OpenRGBError("timed out")
+            return self.reply
+
+    def _client(self, reply):
+        client = self._Client(reply)
+        # Never connected; only gettimeout/settimeout are exercised.
+        client._socket = socket.socket()
+        self.addCleanup(client._socket.close)
+        return client
+
+    def test_it_offers_our_version(self) -> None:
+        client = self._client(struct.pack("<I", 3))
+        self.assertEqual(client._negotiate_protocol(), 3)
+        _device, command, payload = client.sent[0]
+        self.assertEqual(command, CMD_REQUEST_PROTOCOL_VERSION)
+        self.assertEqual(struct.unpack("<I", payload)[0], PROTOCOL_VERSION)
+
+    def test_it_takes_the_lower_of_the_two(self) -> None:
+        self.assertEqual(self._client(struct.pack("<I", 99))._negotiate_protocol(), PROTOCOL_VERSION)
+        self.assertEqual(self._client(struct.pack("<I", 2))._negotiate_protocol(), 2)
+
+    def test_a_server_too_old_to_answer_means_version_zero(self) -> None:
+        """Not an error: such a server genuinely speaks 0, and matching it is
+        what keeps our writes parseable by it."""
+
+        self.assertEqual(self._client(None)._negotiate_protocol(), 0)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -8,7 +8,7 @@ happened, including the parts that went wrong.
 
 | | |
 |---|---|
-| `linux-rgb` | 99 tests, private repo, pushed |
+| `linux-rgb` | 111 tests, private repo, pushed |
 | `matterlights` | publisher + master-off publishing + LED rendering, 227 tests, pushed |
 | LEDs driven | **207** across 7 controllers |
 | Verified live | capture → bulbs → socket → OpenRGB + AIO, on real hardware |
@@ -180,6 +180,39 @@ close — while the daemon held it. It produced a real
 `Reply 0x01 does not acknowledge command 0x07` in the daemon's log, from the
 debugging itself. `devices` is now read-only and skips the device entirely while
 the daemon is listening on the socket.
+
+### 🚨 The protocol version is negotiated PER CLIENT, and defaults to 0
+
+`REQUEST_CONTROLLER_DATA` carries the version it wants, so descriptions come
+back correctly formatted whether or not the handshake ever happened. Everything
+reads fine. But the server also stores a version *per client*, defaulting to 0,
+and `UPDATE_MODE` is parsed at **that** version. A version-3 mode block read as
+version 0 is 8 bytes longer than expected (the brightness fields), so the
+remainder becomes the next packet's header.
+
+The connection then never recovers: the server waits for a payload length it
+invented, our packets pile up unread -- 238 kB were measured -- and every reply
+we wait for never arrives. It presents as *"the OpenRGB server is wedged"*, and
+it is not: only our stream is. Other clients were answered in 0.1 ms throughout,
+which is what finally distinguished the two.
+
+Fixed by sending `REQUEST_PROTOCOL_VERSION` (40) at connect, requesting every
+description at the negotiated version and echoing every mode back at the same
+one, so the two cannot drift apart.
+
+### The measurement that was worthless
+
+A 75-second soak wrote 374 full frames at 5 Hz with a worst reply of 17 ms and
+concluded the server handled the load comfortably. It did not: that test never
+pushed direct mode, so **every write it measured was a no-op the device
+ignored**. Timing a write that does nothing measures nothing. Once modes were
+actually pushed the same sequence stalled within three frames.
+
+Its sibling: a health check that reconnects on the first slow reply reconnects
+about every twenty seconds, because this server also goes quiet for tens of
+seconds while *still applying* the writes it is sent. Being unresponsive and
+being broken are different states, and the check now needs six consecutive
+misses before it acts.
 
 ### What was missing, structurally
 

@@ -371,3 +371,51 @@ class StaticColourTest(unittest.TestCase):
         client = self._Client([self._Controller(4, "Keychron K0 Max", 0)])
         sink._apply_static(client)
         self.assertEqual(client.writes, [])
+
+
+class DeadSocketTest(unittest.TestCase):
+    """🚨 A connection error must drop the client, not just be reported.
+
+    The resilient wrapper catches the exception but cannot clear the sink's
+    client, so a dead socket would be reused for every later write -- failing
+    identically each time. Only the health check ever reconnected, which costs
+    six timeouts. Measured as ~30 s of darkness after an OpenRGB restart, on top
+    of the retry backoff.
+    """
+
+    def setUp(self) -> None:
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    class _Broken(_FakeClient):
+        def update_leds(self, device, colours) -> None:
+            raise OpenRGBError("Send failed: [Errno 32] Broken pipe")
+
+        def update_zone_leds(self, device, zone, colours) -> None:
+            raise OpenRGBError("Send failed: [Errno 32] Broken pipe")
+
+    def _sink(self, targets):
+        sink = OpenRGBSink(parse_config({"socket": {"path": "/tmp/x.sock"}}))
+        sink._interval = lambda _bus: 0.0  # type: ignore[method-assign]
+        sink._check_health = lambda _now: None  # type: ignore[method-assign]
+        sink._client = self._Broken()
+        sink._targets = list(targets)
+        return sink
+
+    def test_a_broken_write_drops_the_client(self) -> None:
+        sink = self._sink(_ONE)
+        with self.assertRaises(OpenRGBError):
+            sink.write(NEAR, FAR)
+        self.assertIsNone(sink._client, "the next write must reconnect, not reuse this")
+
+    def test_a_broken_black_drops_the_client(self) -> None:
+        sink = self._sink(_ONE)
+        with self.assertRaises(OpenRGBError):
+            sink.black()
+        self.assertIsNone(sink._client)
+
+    def test_the_per_zone_path_drops_it_too(self) -> None:
+        sink = self._sink(_PER_ZONE)
+        with self.assertRaises(OpenRGBError):
+            sink.write(NEAR, FAR)
+        self.assertIsNone(sink._client)

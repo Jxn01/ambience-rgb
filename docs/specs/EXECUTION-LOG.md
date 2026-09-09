@@ -8,7 +8,7 @@ happened, including the parts that went wrong.
 
 | | |
 |---|---|
-| `linux-rgb` | 112 tests, private repo, pushed |
+| `linux-rgb` | 120 tests, private repo, pushed |
 | `matterlights` | publisher + master-off publishing + LED rendering, 227 tests, pushed |
 | LEDs driven | **207** across 7 controllers |
 | Verified live | capture → bulbs → socket → OpenRGB + AIO, on real hardware |
@@ -249,6 +249,42 @@ misses before it acts.
 that carried all three bugs. 99 tests now, up from 74; the new ones assert the
 mode packet is 1101 and not 1100, that an unchanged colour is not resent, and
 that a read-only close writes nothing.
+
+## Verified without the owner present
+
+Their session was locked, so there was no screen capture and no real frames. That
+turned out to be better than watching the screen: publishing frames *as
+matterlights does*, straight to the daemon's socket, means the colours are known
+exactly and every policy branch can be asserted against what the hardware
+actually holds.
+
+**Policy, 9/9** -- near/far mapping across all seven controllers, the lamp master
+switch being ignored (the owner's explicit choice), the RGB switch blacking
+everything, display sleep, dark screen, staleness blacking rather than freezing,
+and recovery from each. The Keychron asserted white throughout.
+
+**Failure injection, 7/7** -- the OpenRGB server restarted underneath a running
+daemon, the daemon SIGKILLed, and a clean stop:
+
+| Injected | Result |
+|---|---|
+| OpenRGB server restart | drives again in **11 s**, Keychron's white restored automatically |
+| `SIGKILL` the daemon | systemd restarts it, driving again in **4 s** |
+| `systemctl stop` | every driven device black, static Keychron untouched |
+
+⚠️ **The first version of the SIGKILL test passed instantly and proved nothing.**
+It waited for the hardware to show the expected colour -- which it already did,
+because a killed daemon leaves the last colour standing. Nothing had to recover
+for it to pass. It now blanks the device first, so only a real write can satisfy
+it. Third instance this session of a check that cannot distinguish two states.
+
+### A connection error must drop the client
+
+Found by that injection, not by reading the code. `ResilientSink` catches a write
+failure but cannot clear the sink's client, so after the server died the daemon
+kept writing to the same broken pipe -- failing identically every time. The only
+path that ever reconnected was the health check, six timeouts later. Measured
+recovery **71 s**; dropping the client at the point of failure took it to **11 s**.
 
 ## Deliberately not done
 

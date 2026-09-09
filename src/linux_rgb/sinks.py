@@ -247,17 +247,26 @@ class OpenRGBSink:
         assert self._client is not None
         now = time.monotonic()
         self._check_health(now)
-        for device, segments, bus, per_zone in self._targets:
-            # Rate-limit per bus. SMBus is shared with sensor reads; the USB
-            # devices have no such constraint and get the full rate.
-            last = self._last_write.get(bus, 0.0)
-            if now - last < self._interval(bus):
-                continue
-            key = (device, segments[0][0] if per_zone else None)
-            if not self._should_send(key, (near, far), now):
-                continue
-            self._send_colours(device, segments, per_zone, near, far)
-            self._sent[key] = ((near, far), time.monotonic())
+        try:
+            for device, segments, bus, per_zone in self._targets:
+                # Rate-limit per bus. SMBus is shared with sensor reads; the USB
+                # devices have no such constraint and get the full rate.
+                last = self._last_write.get(bus, 0.0)
+                if now - last < self._interval(bus):
+                    continue
+                key = (device, segments[0][0] if per_zone else None)
+                if not self._should_send(key, (near, far), now):
+                    continue
+                self._send_colours(device, segments, per_zone, near, far)
+                self._sent[key] = ((near, far), time.monotonic())
+        except OpenRGBError:
+            # 🚨 A dead socket must be dropped here, not merely reported. The
+            # resilient wrapper catches the error but cannot clear the client,
+            # so without this every later write fails identically on the same
+            # broken pipe and only the health check ever reconnects -- six
+            # timeouts, ~30 s of darkness, measured after an OpenRGB restart.
+            self.close()
+            raise
         for bus in {target[2] for target in self._targets}:
             if now - self._last_write.get(bus, 0.0) >= self._interval(bus):
                 self._last_write[bus] = now
@@ -358,8 +367,12 @@ class OpenRGBSink:
         if self._client is None:
             self.connect()
         assert self._client is not None
-        for device, segments, _bus, per_zone in self._targets:
-            self._send_colours(device, segments, per_zone, (0, 0, 0), (0, 0, 0))
+        try:
+            for device, segments, _bus, per_zone in self._targets:
+                self._send_colours(device, segments, per_zone, (0, 0, 0), (0, 0, 0))
+        except OpenRGBError:
+            self.close()  # same reason as write(): never reuse a dead socket
+            raise
 
     def close(self) -> None:
         if self._client is not None:

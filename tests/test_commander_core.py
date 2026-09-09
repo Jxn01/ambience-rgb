@@ -61,7 +61,9 @@ class FakeHid:
         self._next.append(bytes(reply))
         return len(packet)
 
-    def read(self, length: int) -> list[int]:
+    def read(self, length: int, timeout_ms: int = -1) -> list[int]:
+        # Matches cython-hidapi: read(max_length, timeout_ms). The driver drains
+        # with timeout_ms=0 before every write, so the signature matters.
         return list(self._next.pop(0)) if self._next else []
 
     def close(self) -> None:
@@ -103,7 +105,7 @@ class TransportTest(unittest.TestCase):
 
     def test_a_silent_device_is_an_error(self) -> None:
         fake = FakeHid()
-        fake.read = lambda length: []
+        fake.read = lambda length, timeout_ms=-1: []
         cc = _Opened(fake)
         with self.assertRaises(CommanderCoreError) as caught:
             cc.wake()
@@ -235,6 +237,55 @@ class SettlingRetryTest(unittest.TestCase):
         with self.assertRaises(CommanderCoreError) as caught:
             cc._wake_and_read_counts(attempts=2, delay=0.0)
         self.assertIn("did not become ready", str(caught.exception))
+
+
+
+class DrainTest(unittest.TestCase):
+    """The pre-write drain must terminate even against a chatty device.
+
+    An unbounded drain hung the daemon outright the first time it met a
+    controller that kept producing reports, which is exactly what happens for a
+    moment after another process releases the device.
+    """
+
+    def test_it_terminates_against_an_endless_device(self) -> None:
+        fake = FakeHid()
+        fake.read = lambda length, timeout_ms=-1: [0] * length  # never empty
+        cc = _Opened(fake)
+        cc._drain()  # must return rather than spin
+
+    def test_it_never_asks_for_a_zero_timeout(self) -> None:
+        """A 0 ms timeout BLOCKS in cython-hidapi; it does not poll.
+
+        Written the obvious way this hung the daemon outright, so the value is
+        asserted rather than trusted to survive a tidy-up.
+        """
+
+        fake = FakeHid()
+        seen: list[int] = []
+
+        def recording(length, timeout_ms=-1):
+            seen.append(timeout_ms)
+            return []
+
+        fake.read = recording
+        _Opened(fake)._drain()
+        self.assertTrue(seen, "the drain should have read at least once")
+        for timeout in seen:
+            self.assertGreater(timeout, 0, "0 would block forever")
+
+    def test_it_stops_as_soon_as_the_queue_is_empty(self) -> None:
+        fake = FakeHid()
+        calls = {"n": 0}
+
+        def counting(length, timeout_ms=-1):
+            calls["n"] += 1
+            return [] if calls["n"] > 2 else [0] * length
+
+        fake.read = counting
+        cc = _Opened(fake)
+        cc._drain()
+        self.assertEqual(calls["n"], 3, "two queued reports, then empty")
 
 
 if __name__ == "__main__":  # pragma: no cover

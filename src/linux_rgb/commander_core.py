@@ -55,6 +55,16 @@ VENDOR_ID = 0x1B1C
 PRODUCT_ID = 0x0C32
 INTERFACE_NUMBER = 0
 
+# Long enough for a busy controller, short enough that a wedged one is noticed
+# rather than hanging the daemon forever.
+_READ_TIMEOUT_MS = 1000
+
+# Ceiling on the pre-write drain; see CommanderCore._drain.
+_MAX_DRAIN_READS = 32
+
+# Must be > 0: cython-hidapi treats a 0 ms timeout as BLOCKING.
+_DRAIN_TIMEOUT_MS = 1
+
 
 class CommanderCoreError(RuntimeError):
     """The controller could not be opened or did not answer as expected."""
@@ -147,8 +157,31 @@ class CommanderCore:
 
     # -- transport ---------------------------------------------------------
 
-    def _send(self, command: Sequence[int], data: bytes | Sequence[int] = ()) -> bytes:
-        """Write one report and return the reply.
+    def _drain(self) -> None:
+        """Discard any reply still queued from an earlier exchange.
+
+        ⚠️ **Load-bearing.** Without this the controller's replies drift one
+        behind under sustained writing, and the acknowledgement check starts
+        rejecting perfectly good packets -- observed as
+        ``Reply 0x18 does not acknowledge 0x07 during endpoint write`` after a
+        few seconds of colour streaming. liquidctl calls its own
+        ``clear_enqueued_reports`` before every single command for exactly this
+        reason; a colour frame is ten packets, so the queue builds fast.
+        """
+
+        assert self._device is not None
+        # ⚠️ The timeout must be 1 ms, NOT 0. In cython-hidapi a timeout of 0
+        # BLOCKS -- it does not mean "non-blocking" -- so a drain written the
+        # obvious way hangs the daemon forever on the first empty queue.
+        # Measured: read(N, 1) returns empty in 0.001 s; read(N, 0) never
+        # returns. Bounded as well, so a device that keeps talking cannot
+        # trap the loop either.
+        for _ in range(_MAX_DRAIN_READS):
+            if not self._device.read(REPORT_LENGTH, _DRAIN_TIMEOUT_MS):
+                return
+
+    def _exchange(self, packet: bytes, expect: int) -> bytes:
+        """Write one report, read its reply, and check the acknowledgement.
 
         The reply echoes the command byte at index 1. That is a genuine
         device-level acknowledgement and the only confirmation this protocol
@@ -157,18 +190,22 @@ class CommanderCore:
 
         if self._device is None:
             raise CommanderCoreError("Device is not open")
-        self._device.write(command_packet(tuple(command), data))
-        reply = self._device.read(REPORT_LENGTH)
+        self._drain()
+        self._device.write(packet)
+        reply = self._device.read(REPORT_LENGTH, _READ_TIMEOUT_MS)
         while reply and reply[0] != 0x00:
-            reply = self._device.read(REPORT_LENGTH)
+            reply = self._device.read(REPORT_LENGTH, _READ_TIMEOUT_MS)
         reply = bytes(reply)
         if not reply:
-            raise CommanderCoreError(f"No reply to command {tuple(command)!r}")
-        if reply[1] != command[0]:
+            raise CommanderCoreError(f"No reply to command {expect:#04x}")
+        if reply[1] != expect:
             raise CommanderCoreError(
-                f"Reply {reply[1]:#04x} does not acknowledge command {command[0]:#04x}"
+                f"Reply {reply[1]:#04x} does not acknowledge command {expect:#04x}"
             )
         return reply
+
+    def _send(self, command: Sequence[int], data: bytes | Sequence[int] = ()) -> bytes:
+        return self._exchange(command_packet(tuple(command), data), command[0])
 
     def _read_endpoint(self, endpoint, data_type) -> bytes:
         self._send(CMD_OPEN_ENDPOINT, endpoint)
@@ -185,16 +222,7 @@ class CommanderCore:
 
     def _write_endpoint(self, endpoint, data_type, data: bytes) -> None:
         for packet in endpoint_write_packets(tuple(endpoint), tuple(data_type), data):
-            if self._device is None:
-                raise CommanderCoreError("Device is not open")
-            self._device.write(packet)
-            reply = self._device.read(REPORT_LENGTH)
-            while reply and reply[0] != 0x00:
-                reply = self._device.read(REPORT_LENGTH)
-            if reply and reply[1] != packet[2]:
-                raise CommanderCoreError(
-                    f"Reply {reply[1]:#04x} does not acknowledge {packet[2]:#04x} during endpoint write"
-                )
+            self._exchange(packet, packet[2])
 
     # -- operations --------------------------------------------------------
 

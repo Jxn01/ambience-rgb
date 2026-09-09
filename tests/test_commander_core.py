@@ -290,3 +290,80 @@ class DrainTest(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class ReadOnlyInspectionTest(unittest.TestCase):
+    """⚠️ A diagnostic must not mutate the thing it inspects.
+
+    Exactly one process may hold this device. ``linux-rgb devices`` opening it
+    normally forces fan mode on the way in and writes black on the way out --
+    which, with the daemon driving, fought it over the single handle and
+    surfaced as ``Reply 0x01 does not acknowledge command 0x07``. Observed for
+    real while debugging, from the debugging itself.
+    """
+
+    def test_a_read_only_close_does_not_black_the_device(self) -> None:
+        fake = FakeHid()
+        cc = _Opened(fake)
+        cc._read_only = True
+        cc.led_counts = [29, 8, 8, 8, None, None, None]
+        cc.close()
+        self.assertTrue(fake.closed, "the handle must still be released")
+        self.assertEqual(
+            [p for p in fake.written if p[2] == 0x06], [], "a read-only close must write nothing"
+        )
+
+    def test_a_normal_close_still_blacks(self) -> None:
+        """The guard must not have disabled the behaviour it guards."""
+
+        fake = FakeHid()
+        cc = _Opened(fake)
+        cc.led_counts = [29, 8, 8, 8, None, None, None]
+        cc.close()
+        self.assertTrue([p for p in fake.written if p[2] == 0x06])
+
+
+class DaemonDetectionTest(unittest.TestCase):
+    """The socket FILE existing proves nothing; only connecting does."""
+
+    def test_an_unbound_path_reads_as_not_running(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from linux_rgb.__main__ import daemon_is_listening
+
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertFalse(daemon_is_listening(Path(directory) / "absent.sock"))
+
+    def test_a_bound_socket_reads_as_running(self) -> None:
+        import socket
+        import tempfile
+        from pathlib import Path
+
+        from linux_rgb.__main__ import daemon_is_listening
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "live.sock"
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            server.bind(str(path))
+            try:
+                self.assertTrue(daemon_is_listening(path))
+            finally:
+                server.close()
+
+    def test_a_stale_socket_file_reads_as_not_running(self) -> None:
+        """A crashed daemon leaves the file behind; that must not fool us."""
+
+        import socket
+        import tempfile
+        from pathlib import Path
+
+        from linux_rgb.__main__ import daemon_is_listening
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stale.sock"
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+            server.bind(str(path))
+            server.close()
+            self.assertTrue(path.exists(), "the file survives the process")
+            self.assertFalse(daemon_is_listening(path))

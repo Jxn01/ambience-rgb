@@ -35,6 +35,11 @@ RGB = tuple[int, int, int]
 # dead server, short enough that a restarted one is picked up without help.
 RETRY_SECONDS = 10.0
 
+# How often an UNCHANGED colour is written again. The devices need an occasional
+# refresh so a controller that was reset or re-detected does not sit on a stale
+# frame, but writing an unchanged colour every tick is what floods the server.
+REFRESH_SECONDS = 2.0
+
 
 class Sink(Protocol):
     name: str
@@ -98,12 +103,15 @@ class OpenRGBSink:
         # device index -> list of (zone index or None, group, led count)
         self._targets: list[tuple[int, int | None, str, int, str]] = []
         self._last_write: dict[str, float] = {}
+        # Per-target (device, zone) -> (colour, when it was last sent).
+        self._sent: dict[tuple[int, int | None], tuple[RGB, float]] = {}
 
     def connect(self) -> None:
         client = OpenRGBClient(
             self._config.openrgb_host, self._config.openrgb_port, logger=self._logger
         ).connect()
         self._client = client
+        self._sent.clear()
         self._targets = self._plan(client)
         if not self._targets:
             # The server answers its socket before device detection finishes, so
@@ -117,10 +125,12 @@ class OpenRGBSink:
                 "detection may still be running"
             )
         for device_index in sorted({t[0] for t in self._targets}):
-            # Devices sitting in a firmware effect ignore colour writes until
-            # they are put into direct mode. The GPU ships on Rainbow and the
-            # ASRock board on Off, so this is not a theoretical case.
-            client.set_custom_mode(device_index)
+            # Devices sitting in a firmware effect ignore colour writes until the
+            # DEVICE is put into direct mode -- not merely the server's model of
+            # it. The GPU ships on Rainbow and the ASRock board on Off, so this
+            # is not theoretical: with only SETCUSTOMMODE the GPU cycled its
+            # rainbow for hours while every readback claimed it was in Direct.
+            client.set_direct_mode(device_index)
 
     def _plan(self, client: OpenRGBClient) -> list[tuple[int, int | None, str, int, str]]:
         """Resolve controllers to (device, zone, group, leds, bus) write targets.
@@ -173,23 +183,58 @@ class OpenRGBSink:
             if now - last < self._interval(bus):
                 continue
             colour = near if group == GROUP_NEAR else far
-            if zone is None:
-                self._client.update_leds(device, [colour] * leds)
-            else:
-                self._client.update_zone_leds(device, zone, [colour] * leds)
+            if not self._should_send(device, zone, colour, now):
+                continue
+            self._send_colour(device, zone, colour, leds)
         for bus in {t[4] for t in self._targets}:
             if now - self._last_write.get(bus, 0.0) >= self._interval(bus):
                 self._last_write[bus] = now
 
+    def _should_send(self, device: int, zone: int | None, colour: RGB, now: float) -> bool:
+        """Whether this target needs the packet, or already shows this colour.
+
+        🚨 **The write side of this protocol is fire-and-forget, so overrunning
+        the server is invisible from here.** Every ``sendall`` returns in
+        microseconds whatever the server is doing with the bytes; the OpenRGB
+        server then applies them one at a time against real USB and SMBus
+        devices, which is far slower. Writing all eleven targets every tick
+        offered it ~43 packets a second, it drained them at a fraction of that,
+        and the backlog grew without bound -- so the board displayed a colour
+        from minutes ago. Across a display-off period it displayed black long
+        after the screen came back, which reads exactly like "the RGB is dead".
+
+        Sending only what changed makes a static screen almost free while a
+        changing one still streams, and the refresh keeps a re-detected
+        controller from sitting on a stale frame.
+        """
+
+        previous = self._sent.get((device, zone))
+        if previous is None:
+            return True
+        colour_before, when = previous
+        return colour_before != colour or (now - when) >= REFRESH_SECONDS
+
+    def _send_colour(self, device: int, zone: int | None, colour: RGB, leds: int) -> None:
+        assert self._client is not None
+        if zone is None:
+            self._client.update_leds(device, [colour] * leds)
+        else:
+            self._client.update_zone_leds(device, zone, [colour] * leds)
+        self._sent[(device, zone)] = (colour, time.monotonic())
+
     def black(self) -> None:
+        """Write black to every target unconditionally.
+
+        Deliberately bypasses the change filter: black is what every exit path
+        writes, and "we think it is already black" is not good enough when the
+        alternative is leaving the machine lit after a shutdown.
+        """
+
         if self._client is None:
             self.connect()
         assert self._client is not None
         for device, zone, _group, leds, _bus in self._targets:
-            if zone is None:
-                self._client.update_leds(device, [(0, 0, 0)] * leds)
-            else:
-                self._client.update_zone_leds(device, zone, [(0, 0, 0)] * leds)
+            self._send_colour(device, zone, (0, 0, 0), leds)
 
     def close(self) -> None:
         if self._client is not None:

@@ -72,7 +72,7 @@ and `systemctl --user restart matterlights-sync`.
 |---|---|
 | `linux-rgb run` | The daemon. What the systemd unit runs. |
 | `linux-rgb off` | Write black to everything once and exit. What the shutdown unit runs. |
-| `linux-rgb devices` | Print what would be driven, with groups, buses and LED counts. **Run this first when something looks wrong.** |
+| `linux-rgb devices` | Print what would be driven, with groups, buses and LED counts. **Run this first when something looks wrong.** Read-only: it never changes device state, and skips the Commander while the daemon holds it. |
 | `linux-rgb -v …` | Debug logging, including every colour decision. |
 
 ## Units
@@ -157,7 +157,29 @@ you how to put it back.
 **Nothing lights up.** `linux-rgb devices`. If OpenRGB is unavailable, check
 `systemctl --user status linux-rgb-openrgb`. If the Commander Core is
 unavailable, something else is holding `/dev/hidraw20` — almost always an
-OpenRGB whose detector got re-enabled.
+OpenRGB whose detector got re-enabled. (`devices` opens the Commander read-only,
+and skips it entirely while the daemon is running: exactly one process may hold
+that device, and a diagnostic that fights the daemon for it produces protocol
+errors in both.)
+
+**A device runs its own firmware effect while OpenRGB says it is in Direct.**
+Fixed, and worth knowing why. OpenRGB's `SETCUSTOMMODE` (1100) only assigns
+`active_mode` on the server's *in-memory* controller; it never calls
+`UpdateMode()`, so the device is never told and every readback happily reports
+"Direct". Devices that honour raw per-LED writes anyway (Corsair DRAM, Razer)
+work regardless; the ASUS GPU, the ASRock board and the Alienware monitor must
+be *told*, and until they are they cycle their firmware pattern while accepting
+and discarding every colour. `set_direct_mode` sends `UPDATE_MODE` (1101) with
+the mode echoed back verbatim.
+
+**Colours are stale — the case lags the screen by seconds or shows an old
+frame.** The write side is fire-and-forget: `sendall` returns in microseconds
+regardless of what the server does with the bytes, so overrunning it is
+invisible from here. Writing every target every tick offered the server ~43
+packets a second against real USB and SMBus devices; it drained them far slower
+and the backlog grew without bound. The sink now sends only what changed, with a
+2 s refresh. If you raise `usb_hz` or add targets, that budget is what you are
+spending.
 
 **Everything is white.** Expected on a greyscale screen: it is above the dark
 cutoff but carries no saturation, so it normalises to white at full brightness.

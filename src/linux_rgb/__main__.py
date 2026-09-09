@@ -21,6 +21,26 @@ def _configure_logging(verbose: bool) -> None:
     )
 
 
+def daemon_is_listening(socket_path) -> bool:
+    """Whether a linux-rgb daemon is already bound to the publish socket.
+
+    Used to keep the diagnostics away from hardware the daemon is driving. A
+    datagram socket file exists whether or not anyone is bound to it, so the
+    file's presence proves nothing; connecting to it does.
+    """
+
+    import socket as _socket
+
+    probe = _socket.socket(_socket.AF_UNIX, _socket.SOCK_DGRAM)
+    try:
+        probe.connect(str(socket_path))
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
 def _devices(config) -> int:
     """Print what would be driven, and how. The first thing to run when puzzled."""
 
@@ -56,12 +76,20 @@ def _devices(config) -> int:
     if config.commander.enabled:
         from linux_rgb.commander_core import CommanderCore, CommanderCoreError
 
+        header = (
+            f"\n  Corsair Commander Core (own driver)      "
+            f"pump={config.commander.pump_group} fans={config.commander.fan_group}"
+        )
+        if daemon_is_listening(config.socket_path):
+            # Exactly one process may hold this device. Opening it here would
+            # interleave reads with the daemon's and desync both.
+            print(header)
+            print("      held by the running daemon; not opened (stop linux-rgb to inspect)")
+            return 0
+
         try:
-            with CommanderCore() as device:
-                print(
-                    f"\n  Corsair Commander Core (own driver)      pump={config.commander.pump_group} "
-                    f"fans={config.commander.fan_group}"
-                )
+            with CommanderCore(read_only=True) as device:
+                print(header)
                 print(f"      pump {device.pump_leds} LEDs, ports {device.port_leds}")
         except CommanderCoreError as error:
             print(f"\n  Commander Core unavailable: {error}")

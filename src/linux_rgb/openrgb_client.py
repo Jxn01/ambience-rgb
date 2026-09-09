@@ -41,12 +41,34 @@ CMD_SET_CLIENT_NAME = 50
 CMD_UPDATE_LEDS = 1050
 CMD_UPDATE_ZONE_LEDS = 1051
 CMD_SET_CUSTOM_MODE = 1100
+CMD_UPDATE_MODE = 1101
 
 RGB = tuple[int, int, int]
 
 
 class OpenRGBError(RuntimeError):
     """The server is unreachable or answered something unparseable."""
+
+
+class Mode:
+    """One of a controller's modes, kept with the exact bytes it arrived in.
+
+    ``blob`` is the mode's slice of the controller record, verbatim. Sending a
+    mode back means echoing that slice, so we never have to re-serialise a
+    struct whose field list differs between protocol versions -- a mis-sized
+    mode block is the one parse error that produces a plausible-looking device
+    with the wrong LED counts rather than an exception.
+    """
+
+    __slots__ = ("index", "name", "blob")
+
+    def __init__(self, index: int, name: str, blob: bytes) -> None:
+        self.index = index
+        self.name = name
+        self.blob = blob
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"Mode({self.index}, {self.name!r})"
 
 
 class Zone:
@@ -62,13 +84,37 @@ class Zone:
 
 
 class Controller:
-    __slots__ = ("index", "name", "led_count", "zones")
+    __slots__ = ("index", "name", "led_count", "zones", "modes", "active_mode")
 
-    def __init__(self, index: int, name: str, led_count: int, zones: list[Zone]) -> None:
+    def __init__(
+        self,
+        index: int,
+        name: str,
+        led_count: int,
+        zones: list[Zone],
+        modes: list[Mode] | None = None,
+        active_mode: int = 0,
+    ) -> None:
         self.index = index
         self.name = name
         self.led_count = led_count
         self.zones = zones
+        self.modes = modes or []
+        self.active_mode = active_mode
+
+    def direct_mode(self) -> Mode | None:
+        """The mode that makes per-LED writes take effect, if the device has one.
+
+        Named "Direct" on every controller on this rig, but the fallback matters:
+        a device with no such mode (some keyboards call it "Custom") should still
+        get its closest equivalent rather than nothing.
+        """
+
+        for wanted in ("direct", "custom"):
+            for mode in self.modes:
+                if mode.name.strip().lower() == wanted:
+                    return mode
+        return None
 
     def zone_by_name(self, name: str) -> Zone | None:
         for zone in self.zones:
@@ -108,13 +154,16 @@ def parse_controller(index: int, data: bytes) -> Controller:
     for _ in range(5):  # vendor, description, version, serial, location
         take_string()
 
-    (mode_count, _active_mode) = take("<Hi")
-    for _ in range(mode_count):
-        take_string()
+    (mode_count, active_mode) = take("<Hi")
+    modes: list[Mode] = []
+    for mode_index in range(mode_count):
+        start = offset[0]
+        mode_name = take_string()
         take("<i")            # value
         take("<IIIIIIIIIII")  # 11 u32 fields in protocol 3
         (colour_count,) = take("<H")
         offset[0] += 4 * colour_count
+        modes.append(Mode(mode_index, mode_name, data[start : offset[0]]))
 
     (zone_count,) = take("<H")
     zones: list[Zone] = []
@@ -127,7 +176,7 @@ def parse_controller(index: int, data: bytes) -> Controller:
         zones.append(Zone(zone_index, zone_name, led_count))
 
     (led_count,) = take("<H")
-    return Controller(index, name, led_count, zones)
+    return Controller(index, name, led_count, zones, modes, active_mode)
 
 
 class OpenRGBClient:
@@ -227,13 +276,53 @@ class OpenRGBClient:
     # -- writing -----------------------------------------------------------
 
     def set_custom_mode(self, device: int) -> None:
-        """Put a controller into its direct/custom mode so writes take effect.
+        """Ask the SERVER to select the controller's custom mode.
 
-        Devices sitting in a firmware effect (the GPU ships on Rainbow, the
-        ASRock board on Off) ignore colour writes until this is sent.
+        🚨 **This does not reach the hardware, and the name invites you to think
+        it does.** OpenRGB's server handles ``SETCUSTOMMODE`` by assigning
+        ``active_mode`` on its own in-memory controller and nothing else -- it
+        never calls ``UpdateMode()``. The device is never told, so it keeps
+        running whatever firmware effect it was in, while every readback of the
+        server cheerfully reports "Direct".
+
+        Kept only as the fallback for a controller that exposes no direct mode
+        to push. Use :meth:`set_direct_mode`.
         """
 
         self._send(device, CMD_SET_CUSTOM_MODE)
+
+    def update_mode(self, device: int, mode: Mode) -> None:
+        """Write a mode to the DEVICE. This is the call that changes hardware.
+
+        The mode is echoed back exactly as it was received, so the wire format
+        is whatever the server already sent us rather than a struct we rebuild
+        and have to keep in step with the protocol version.
+        """
+
+        payload = struct.pack("<i", mode.index) + mode.blob
+        self._send(device, CMD_UPDATE_MODE, struct.pack("<I", len(payload) + 4) + payload)
+
+    def set_direct_mode(self, device: int) -> bool:
+        """Put the controller into direct mode for real; True if one was pushed.
+
+        Devices split into two camps, and the split is invisible until you look
+        at the hardware. Corsair DRAM and the Razer mouse honour per-LED writes
+        whatever mode they are in, so they work either way. The ASUS GPU, the
+        ASRock board and the Alienware monitor must be *told* to enter direct
+        mode, and until they are they keep cycling their firmware effect while
+        accepting -- and ignoring -- every colour written to them.
+        """
+
+        controller = next((c for c in self.controllers if c.index == device), None)
+        mode = controller.direct_mode() if controller is not None else None
+        if mode is None:
+            self._logger.info(
+                "OpenRGB: device %d exposes no direct mode; falling back to custom", device
+            )
+            self.set_custom_mode(device)
+            return False
+        self.update_mode(device, mode)
+        return True
 
     def update_leds(self, device: int, colours: list[RGB]) -> None:
         body = struct.pack("<H", len(colours)) + b"".join(

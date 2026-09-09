@@ -8,19 +8,24 @@ happened, including the parts that went wrong.
 
 | | |
 |---|---|
-| `linux-rgb` | 74 tests, 7 commits, private repo, pushed |
-| `matterlights` | +2 commits (publisher, master-off publishing), 210 tests, pushed |
+| `linux-rgb` | 99 tests, private repo, pushed |
+| `matterlights` | publisher + master-off publishing + LED rendering, 227 tests, pushed |
 | LEDs driven | **207** across 7 controllers |
 | Verified live | capture → bulbs → socket → OpenRGB + AIO, on real hardware |
 
 ## Verified on the machine
 
 - **Frames flow at 5.1/s** from matterlights over the unix datagram socket.
-- **Colours match end to end.** The colour read back from OpenRGB equals the
-  colour in the published frame, tick for tick.
+- **Colours match end to end** — *in the plumbing only, and that distinction
+  turned out to matter.* The colour read back from OpenRGB equals the colour in
+  the published frame, tick for tick. That is a readback of the **server's own
+  model**, not of any LED. It proved the transport and proved nothing about
+  whether a single diode lit; three separate faults hid behind it for a day.
+  See "The day after" below.
 - **The per-zone split works.** Fed near=red / far=blue, the ASRock board's *IO
   Cover* and *PCB* read red while all four addressable headers read blue — from
-  a single controller, exactly as configured.
+  a single controller, exactly as configured. (Again: read back from the server.
+  The board was in fact showing a firmware pattern at the time.)
 - **The Commander Core lights.** Red, green and blue each held for two seconds;
   LED counts `[29, 8, 8, 8, None, None, None]` before and after, matching
   liquidctl as an independent implementation.
@@ -107,6 +112,81 @@ Resize is **1000**. Sending 1102 expecting a resize does nothing visible. Worse,
 a genuine resize on a controller with no zones crashes OpenRGB 1.0rc3 outright
 (`std::out_of_range`), which is how the Commander Core's zones were confirmed
 genuinely empty rather than merely misparsed.
+
+## The day after — three faults behind one symptom
+
+Reported the next morning as "only the RAM and the mouse are working, everything
+else is turned off", and separately "the RGB off switch doesn't work". Both
+sentences were accurate. Neither was one bug.
+
+The verification that let all three through was reading colours back from the
+OpenRGB **server**. That confirms the packet arrived and nothing more. The one
+check never made was a human looking at the hardware, which is precisely the
+check that was declined on the night (the webcam points into the owner's room).
+A readback that cannot fail for the reason you care about is not evidence.
+
+### 🚨 SETCUSTOMMODE does not reach the device
+
+The client sent `SETCUSTOMMODE` (1100) and the docstring claimed it "puts a
+controller into its direct/custom mode so writes take effect". It does not.
+OpenRGB's server handles it by assigning `active_mode` on its own in-memory
+controller; it never calls `UpdateMode()`. The device is never told.
+
+The split this produces is invisible from the server. Corsair DRAM and the Razer
+mouse honour per-LED writes in any mode, so they worked. The ASUS GPU, the ASRock
+board and the Alienware monitor must be *told* to enter direct mode — so they
+cycled their firmware patterns for a day, accepting and discarding every colour,
+while every readback reported "Direct". The tell was the owner saying *the GPU is
+rotating between colours, like its default preset* — a sentence no readback could
+have produced.
+
+Fixed by sending `UPDATE_MODE` (1101) with the mode echoed back byte-for-byte,
+which is why the parser now keeps each mode's raw slice.
+
+### 🚨 A sampled colour is not the colour a bulb emits
+
+The payload's `near`/`far` were the raw screen sample. Home Assistant takes
+`rgb_color` and `brightness` separately and normalises the colour, so with
+`BRIGHTNESS_FLOOR=255` a lamp fed `(24, 24, 23)` emits a bright warm white.
+An addressable LED has no brightness channel — its brightness *is* the magnitude
+of its triple — so it got a 9% grey, indistinguishable from off.
+
+That also explains the second complaint exactly: the RGB switch worked, driving
+every device `(23,23,23)` → `(0,0,0)` → `(24,24,24)`, and nothing visible
+changed. **A control that works perfectly can still be reported as broken when
+both of its states look identical.**
+
+Fixed in matterlights, not here: the extension cannot reconstruct what a bulb
+emits, because the payload's `brightness` was the raw average rather than the
+effective brightness, and the floor lives over there.
+
+### 🚨 Fire-and-forget hides an overrun completely
+
+Writing every target every tick offered the server ~43 packets a second. It
+applies them one at a time against real USB and SMBus hardware, far slower than
+that, so the backlog grew without bound and the board displayed a frame from
+minutes earlier. Across the 8.5 hours the display slept, the queue was full of
+black — so the board stayed dark long after the screen came back.
+
+Every `sendall` returned in 0.00 ms throughout. There is no backpressure, no
+error and no log line; the only symptom is that the lights are wrong in a way
+that looks like a dead device. The sink now writes only what changed, with a 2 s
+refresh, and `black()` deliberately bypasses the filter.
+
+### The diagnostic that caused a fault
+
+`linux-rgb devices` opened the Commander Core, forced fan mode and wrote black on
+close — while the daemon held it. It produced a real
+`Reply 0x01 does not acknowledge command 0x07` in the daemon's log, from the
+debugging itself. `devices` is now read-only and skips the device entirely while
+the daemon is listening on the socket.
+
+### What was missing, structurally
+
+`openrgb_client.py` and `sinks.py` had **no test files at all** — the two modules
+that carried all three bugs. 99 tests now, up from 74; the new ones assert the
+mode packet is 1101 and not 1100, that an unchanged colour is not resent, and
+that a read-only close writes nothing.
 
 ## Deliberately not done
 

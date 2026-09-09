@@ -93,10 +93,16 @@ class CommanderCore:
     returns it to its firmware pattern (green fans on this rig).
     """
 
-    def __init__(self, path: bytes | None = None, logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        path: bytes | None = None,
+        logger: logging.Logger | None = None,
+        read_only: bool = False,
+    ) -> None:
         self._logger = logger or LOGGER
         self._path = path
         self._device = None
+        self._read_only = read_only
         self.led_counts: list[int | None] = []
 
     # -- lifecycle ---------------------------------------------------------
@@ -131,17 +137,30 @@ class CommanderCore:
         # Read the topology BEFORE forcing fan mode: afterwards the controller
         # can report the 34 slots it exposes rather than the LEDs that exist.
         self.led_counts = self._wake_and_read_counts()
-        self._force_fan_mode()
+        if not self._read_only:
+            # Forcing fan mode changes device state, so a read-only inspection
+            # must not do it -- see the note on close().
+            self._force_fan_mode()
         self._logger.info(
             "Commander Core open on %s; LED counts %s", path.decode(errors="replace"), self.led_counts
         )
         return self
 
     def close(self) -> None:
+        """Release the device, blacking it first unless this is a read-only open.
+
+        ⚠️ A read-only open must not black on the way out. ``linux-rgb devices``
+        is a diagnostic, and a diagnostic that turns the AIO off -- and forces
+        fan mode on the way in -- is worse than useless when the daemon is
+        driving it: it fights the daemon over the one handle this device allows
+        and the failure looks like a protocol fault.
+        """
+
         if self._device is None:
             return
         try:
-            self.black()
+            if not self._read_only:
+                self.black()
         except Exception:  # noqa: BLE001 - closing must not raise
             self._logger.debug("Could not black the Commander Core on close", exc_info=True)
         try:

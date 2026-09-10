@@ -52,7 +52,7 @@ REFRESH_SECONDS = 2.0
 # or two every frame on a static screen; without this, exact-equality filtering
 # still resends all eleven targets every tick and the server is overrun anyway.
 # Invisible on an LED, and matterlights applies the same idea to the bulbs.
-COLOUR_EPSILON = 6
+COLOUR_EPSILON = 3
 
 # How often to measure the server's lag, and the lag that counts as too far
 # behind. Writes are fire-and-forget, so this round trip is the only honest

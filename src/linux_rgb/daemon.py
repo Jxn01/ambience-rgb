@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 from linux_rgb.config import Config
+from linux_rgb.render import cohere
 from linux_rgb.sinks import ResilientSink, build_sinks
 
 LOGGER = logging.getLogger("linux_rgb.daemon")
@@ -220,6 +221,8 @@ class Daemon:
 
             stale = (time.monotonic() - self._last_frame_at) > STALE_AFTER_SECONDS
             near, far = self.colours_for(latest, stale=stale)
+            if self._config.group_cohesion > 0.0 and (near != BLACK or far != BLACK):
+                near, far = cohere(near, far, self._config.group_cohesion)
             # Black means black: never let a gradient repaint a frame that the
             # policy above decided should be dark.
             palette = [] if near == BLACK and far == BLACK else self.palette_for(latest, stale=stale)

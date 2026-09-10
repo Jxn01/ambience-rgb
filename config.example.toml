@@ -18,8 +18,8 @@ port = 6742
 # Per BUS, not global. USB HID devices are happy at the full sync rate; SMBus is
 # shared with the sensors that fan control and monitoring read, and hammering it
 # is the one genuinely risky thing this program does.
-usb_hz = 10.0
-smbus_hz = 1.0
+usb_hz = 20.0
+smbus_hz = 4.0
 
 [colour]
 # 🚨 These deliberately make the LEDs DIFFER from the bulbs in the numbers, so
@@ -36,6 +36,12 @@ smbus_hz = 1.0
 #             below full -- but NOT a colour already at peak, since 1**g == 1.
 saturation = 1.35
 gamma = 1.2
+
+# Pull the near and far groups toward each other. 0.0 keeps the engine's
+# intent (near = the screen's strongest components, far = its overall mix);
+# 1.0 is one colour everywhere. The gap is deliberate, but at full strength
+# the board showing cyan while the fans show pink reads as a fault.
+group_cohesion = 0.55
 
 [spread]
 # How hard each LED is pulled back to its group's single colour.

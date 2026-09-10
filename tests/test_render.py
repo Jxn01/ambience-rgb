@@ -5,7 +5,7 @@ from __future__ import annotations
 import colorsys
 import unittest
 
-from linux_rgb.render import blend, spread, treat
+from linux_rgb.render import blend, cohere, spread, treat
 
 
 def saturation_of(colour):
@@ -148,3 +148,32 @@ class BlendTest(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class CohereTest(unittest.TestCase):
+    """Near and far are *meant* to differ -- but not so much it looks broken.
+
+    The engine gives near the screen's strongest components and far its overall
+    mix, which is what makes a room feel lit. On hardware, the motherboard
+    showing cyan while the fans show pink reads as a fault rather than a design.
+    """
+
+    def test_zero_leaves_the_engine_s_intent_alone(self) -> None:
+        near, far = (0, 255, 255), (255, 0, 255)
+        self.assertEqual(cohere(near, far, 0.0), (near, far))
+
+    def test_one_makes_them_identical(self) -> None:
+        near, far = cohere((0, 255, 255), (255, 0, 255), 1.0)
+        self.assertEqual(near, far)
+
+    def test_partial_narrows_the_gap_without_closing_it(self) -> None:
+        near, far = cohere((0, 255, 255), (255, 0, 255), 0.6)
+        self.assertNotEqual(near, far)
+        gap = sum(abs(a - b) for a, b in zip(near, far))
+        self.assertLess(gap, sum(abs(a - b) for a, b in zip((0, 255, 255), (255, 0, 255))))
+
+    def test_black_stays_black(self) -> None:
+        self.assertEqual(cohere((0, 0, 0), (0, 0, 0), 1.0), ((0, 0, 0), (0, 0, 0)))
+
+    def test_identical_inputs_are_unchanged(self) -> None:
+        self.assertEqual(cohere((7, 8, 9), (7, 8, 9), 0.5), ((7, 8, 9), (7, 8, 9)))

@@ -105,6 +105,7 @@ repo. `$LINUX_RGB_CONFIG` overrides both.
 | `devices[].static` | A fixed colour (`"#rrggbb"` or `[r, g, b]`) set once per connection instead of synced. |
 | `colour.saturation` | Push each channel away from the mean of the three. `1.0` disables it. |
 | `colour.gamma` | Spread the channels apart. Raises saturation; does **not** dim a colour already at peak. `1.0` disables it. |
+| `colour.group_cohesion` | Pull the near and far group colours toward each other. `0.0` keeps the engine's intent, `1.0` is one colour everywhere. |
 | `spread.bias` | How hard each LED is pulled back to its group's single colour. `1.0` = flat (original behaviour), `0.0` = raw palette gradient. |
 
 ⚠️ **`match` is a substring, not an exact name, deliberately.** OpenRGB renames
@@ -113,8 +114,26 @@ devices between versions — the Commander Core's ports went from `RGB Port 1` t
 silently stop matching and the device would just stop lighting.
 
 ⚠️ **`smbus_hz` should stay well below `usb_hz`.** SMBus is shared with the
-sensors that fan control and monitoring read. Hammering it is the one genuinely
-risky thing this program does.
+sensors that fan control and monitoring read — `coolercontrold` runs on this rig
+— and hammering it is the one genuinely risky thing this program does. It also
+cannot be measured from here: the OpenRGB server acknowledges a packet long
+before the device has applied it, so a round trip times liveness, not the bus.
+Raise it a step at a time and watch fan control, not a benchmark.
+
+### What the rates actually cost
+
+Measured on `jxn-garuda`, capturing 3840×2160 at `SAMPLE_STRIDE=121`:
+
+| Sync rate | matterlights | `linux-rgb` | `openrgb` |
+|---|---|---|---|
+| 5 Hz | 16.3% of one core | ~0% | — |
+| 10 Hz | 32.4% | ~0% | — |
+| 20 Hz | **44.9%** | 0.8% | 0.8% |
+
+The cost is dominated by capture and sampling in matterlights; the daemon and
+the server are noise. Scaling is sub-linear past 10 Hz, so the practical ceiling
+is roughly **30–35 Hz** before one core saturates — and the capture stream is
+capped at twice the sync rate, so 20 Hz already asks Mutter for 40 fps of 4K.
 
 ## Depth, and why the LEDs are not sent the bulbs' colours
 

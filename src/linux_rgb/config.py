@@ -97,6 +97,13 @@ class Config:
     gamma: float = 1.0
     """Spread the channels apart. 1.0 disables it. See render.treat -- note it
     does not dim a colour already at peak."""
+    group_cohesion: float = 0.0
+    """Pull the near and far group colours toward each other. 0.0 = untouched.
+
+    The engine gives the groups different palette colours on purpose. On hardware
+    that can read as a fault -- the board showing cyan while the fans show pink
+    looks broken rather than deliberate. This trades some depth for coherence.
+    """
     spread_bias: float = 1.0
     """How hard each LED is pulled back to its group's single colour.
 
@@ -256,6 +263,7 @@ def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
         smbus_interval_seconds=interval("smbus_hz", 1.0),
         saturation=_positive(colour.get("saturation", 1.0), "colour.saturation"),
         gamma=_positive(colour.get("gamma", 1.0), "colour.gamma"),
+        group_cohesion=_fraction(colour.get("group_cohesion", 0.0), "colour.group_cohesion"),
         spread_bias=_fraction(spread_section.get("bias", 1.0), "spread.bias"),
         devices=tuple(rules),
         commander=commander,

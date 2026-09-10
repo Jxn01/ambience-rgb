@@ -80,6 +80,30 @@ def blend(a: RGB, b: RGB, fraction: float) -> RGB:
     )
 
 
+def cohere(near: RGB, far: RGB, cohesion: float) -> tuple[RGB, RGB]:
+    """Pull the two group colours toward each other by ``cohesion``.
+
+    The ambience engine deliberately gives the near and far groups *different*
+    palette colours -- near carries the screen's strongest components, far its
+    overall mix -- which is what makes a room feel lit rather than washed. On
+    hardware it can read as a fault instead: the motherboard showing cyan while
+    the fans show pink looks like a bug, not a design.
+
+    0.0 keeps them fully distinct (the engine's intent), 1.0 makes them
+    identical (one colour everywhere). In between trades some of the depth for
+    coherence across devices, which is a matter of taste and therefore config.
+    """
+
+    if cohesion <= 0.0:
+        return near, far
+    midpoint = (
+        (near[0] + far[0]) // 2,
+        (near[1] + far[1]) // 2,
+        (near[2] + far[2]) // 2,
+    )
+    return blend(near, midpoint, cohesion), blend(far, midpoint, cohesion)
+
+
 def _spans(weights: list[float], count: int) -> list[int]:
     """Apportion ``count`` LEDs across weights, largest remainder, at least one each."""
 

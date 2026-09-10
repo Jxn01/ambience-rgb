@@ -654,9 +654,12 @@ matterlights' own publisher over UDP; `off --stop-daemon` stopping it with exit
    hidapi, the Katana on `COM3`.
 6. `tests\integration\check_hardware.py`: eyes on the AIO and the soundbar.
 7. matterlights, pulled and restarted with `RGB_PUBLISH_SOCKET=udp://127.0.0.1:45731`,
-   drives the case. Re-run its `scripts\install-autostart.ps1` too: its two
-   tasks were registered with Task Scheduler's 72-hour limit, and afterwards
-   `(Get-ScheduledTask 'MatterLights Screen Sync').Settings.ExecutionTimeLimit`
+   drives the case. Re-run its `scripts\install-autostart.ps1` after the pull,
+   from an elevated shell: its two tasks carry Task Scheduler's 72-hour limit,
+   and only the pulled script registers them the way they were fixed by hand on
+   2026-07-19 -- `pythonw.exe`, no console window. The copy from before the pull
+   would have put a terminal window back at every logon. Afterwards the tasks'
+   `Actions.Execute` ends in `pythonw.exe` and `Settings.ExecutionTimeLimit`
    reads `PT0S`.
 8. A logoff blacks everything -- the session-end window.
 9. `Start-ScheduledTask -TaskName ambience-rgb-lights-off` blacks everything

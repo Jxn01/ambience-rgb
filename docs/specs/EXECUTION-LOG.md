@@ -838,6 +838,15 @@ it. That poll now decodes as `"oem"` and cannot raise.
   days logged in would have been stopped by the scheduler. The script sets
   `PT0S` now; the installed tasks keep the old limit until it is re-run, which
   is on the checklist.
+  🚨 **And re-running that script, as first advised, would have undone a fix.**
+  The Windows half's own memory records that the live tasks were moved to
+  `pythonw.exe` by hand on 2026-07-19, because Windows Terminal ignores
+  `-WindowStyle Hidden`, while the script went on registering
+  `powershell -WindowStyle Hidden -File start-*.ps1`. Found by reading that
+  memory before writing the Windows handoff. The script -- and the start
+  scripts' background mode, the same class -- now launch `pythonw` directly,
+  and a matterlights test fails if `-WindowStyle Hidden` or a PowerShell host
+  comes back into any script's code.
 - **"By its documentation" was an overclaim.** These notes said Task Scheduler's
   restart-on-failure ignores a non-zero exit by its documentation; Microsoft's
   page never defines a failure, and only forum reports say so. Reworded here, in

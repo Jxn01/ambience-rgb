@@ -12,7 +12,13 @@ requires-python = ">=3.11"
 # hid comes from the SYSTEM python-hidapi (cython-hidapi), NOT from PyPI.
 # The PyPI package named "hid" is a DIFFERENT library with a different API and
 # shadows the system one inside a venv, so it must never be declared here.
-dependencies = []
+#
+# pyserial and cryptography (the Katana driver) are safe to declare: the PyPI
+# packages ARE the libraries distributions ship as python-pyserial and
+# python-cryptography. In the --system-site-packages venv the system copies
+# satisfy these and pip installs nothing; elsewhere it fetches the real thing.
+# pyserial 3.3 is the first with `exclusive=`; cryptography 2.0 the first with AESGCM.
+dependencies = ["pyserial>=3.3", "cryptography>=2.0"]
 
 [project.scripts]
 ambience-rgb = "ambience_rgb.__main__:main"

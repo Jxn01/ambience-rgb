@@ -5,20 +5,24 @@ the colours [matterlights](https://github.com/Jxn01/matterlights) has already
 computed for your Matter bulbs. The lamps and the case show the same thing,
 because they are shown the same frame.
 
-It drives 207 LEDs here across seven controllers, and it does it by *reading a
-config file* -- which devices belong to the light around your screen, which light
+It drives 207 LEDs here across seven controllers plus a soundbar's light bar,
+and it does it by *reading a config file* -- which devices belong to the light around your screen, which light
 the room behind it, which to leave alone. The table below is the author's rig,
 not a requirement.
 
 ### Will this work on your machine?
 
 **If OpenRGB can see your hardware, so can this.** That is the whole dependency
-for everything except one device.
+for everything except two devices, which this repository drives itself:
 
-The exception is the **Corsair Commander Core** (the AIO pump and its fans),
-which OpenRGB cannot size the zones of on this board -- so this repository
-carries a hand-written `hidraw` driver for it. If you do not own one, nothing is
-lost: leave it out of the config and the rest works unchanged.
+- the **Corsair Commander Core** (the AIO pump and its fans), which OpenRGB
+  cannot size the zones of on this board -- a hand-written `hidraw` driver;
+- the **Sound Blaster Katana V2X** (and V2) soundbar's light bar, which no RGB
+  software on Linux drives at all -- a serial driver, adapted from the
+  MIT-licensed [`v2x`](https://git.dog/xx/v2x) reverse engineering.
+
+If you own neither, nothing is lost: disable them in the config and the rest
+works unchanged.
 
 You will need **matterlights** running, since this program deliberately does not
 capture the screen itself. And today the transport between them is a unix
@@ -45,6 +49,7 @@ ambience-rgb (this)                                  |
   subscribe  <------------------------------------'
   near/far -> OpenRGBSink       -> RAM x2, GPU, mouse, monitor, motherboard
            -> CommanderCoreSink -> AIO pump + fans   (our own hidraw driver)
+           -> KatanaSink        -> soundbar light bar (our own serial driver)
 ```
 
 MatterLights captures the screen; this does not. A second capture would double
@@ -52,8 +57,9 @@ the PipeWire load and let the lamps and the case disagree during a scene change.
 
 ## What it drives
 
-207 LEDs across seven controllers on the author's rig. Yours will differ; this
-table is what `config.example.toml` describes, and it is the shipped default.
+207 LEDs across seven controllers on the author's rig, plus the soundbar. Yours
+will differ; this table is what `config.example.toml` describes, and it is the
+shipped default.
 
 | Device | LEDs | Group | Bus | Driver |
 |---|---|---|---|---|
@@ -65,6 +71,7 @@ table is what `config.example.toml` describes, and it is the shipped default.
 | Razer Naga V2 Pro (Logo, Numpad) | 2 | far | USB | OpenRGB |
 | Corsair Commander Core — pump | 29 | far | USB HID | **ours** |
 | Corsair Commander Core — fans (3 × 8) | 24 | far | USB HID | **ours** |
+| Sound Blaster Katana V2X — light bar | one colour | far | USB serial | **ours** |
 | Keychron K0 Max | — | **excluded** | — | — |
 
 **near** is what sits around the screen; **far** is what lights the room. The
@@ -78,13 +85,21 @@ Commander Core) and the *distribution* package for the `hidapi` Python binding -
 hid`: the PyPI package under that name is a different library and shadows the
 system one inside the venv.
 
+The Katana driver also needs `pyserial` and `cryptography`. The distribution
+packages (`python-pyserial`, `python-cryptography`) are used when present and
+pip fetches them otherwise -- unlike `hid`, those PyPI packages *are* the same
+libraries.
+
 ```bash
 scripts/install.sh
 ```
 
-It refuses a conda interpreter, checks `hid` is importable, builds the venv with
-`--system-site-packages`, disables OpenRGB's Commander Core detector (backing the
-config up first), installs three systemd units and enables them.
+It refuses a conda interpreter, checks `hid` is importable, marks the
+distribution Python bindings it uses as explicitly installed (so an orphan sweep
+cannot take them), builds the venv with `--system-site-packages`, disables
+OpenRGB's Commander Core detector (backing the config up first), installs a udev
+rule that gives you the Katana's serial port and keeps ModemManager off it, then
+installs three systemd units and enables them.
 
 Then tell MatterLights to publish, in its `.env`:
 
@@ -101,7 +116,7 @@ and `systemctl --user restart matterlights-sync`.
 |---|---|
 | `ambience-rgb run` | The daemon. What the systemd unit runs. |
 | `ambience-rgb off` | Write black to everything once and exit. What the shutdown unit runs. |
-| `ambience-rgb devices` | Print what would be driven, with groups, buses and LED counts. **Run this first when something looks wrong.** Read-only: it never changes device state, and skips the Commander while the daemon holds it. |
+| `ambience-rgb devices` | Print what would be driven, with groups, buses and LED counts. **Run this first when something looks wrong.** Read-only: it never changes a colour, and skips the Commander Core and the Katana while the daemon holds them. |
 | `ambience-rgb -v …` | Debug logging, including every colour decision. |
 
 ## Units
@@ -127,7 +142,11 @@ repo. `$AMBIENCE_RGB_CONFIG` overrides both.
 | `openrgb.restart_command` | Run this when the server wedges beyond reconnecting. Empty = log only. |
 | `rates.usb_hz` / `rates.smbus_hz` | Update rate **per bus**. |
 | `commander.enabled` | Drive the AIO at all. |
-| `commander.pump_group` / `commander.fan_group` | `near` or `far`. |
+| `commander.pump_group` / `commander.fan_group` | `near` or `far`. Not `excluded`: the device is written whole, so use `enabled = false`. |
+| `katana.enabled` | Drive the soundbar's light bar. **Off unless set**, so a config that predates it never goes looking for a serial port. |
+| `katana.group` | `near` or `far`. Not `excluded`, as above. |
+| `katana.rate_hz` | The most colour writes per second -- a ceiling, not a rate. Default `2.0`; see *The Katana driver*. |
+| `katana.port` | A serial port to use instead of finding the soundbar by its USB IDs (`041e:3283`, `041e:3260`). |
 | `devices[].match` | Case-insensitive **substring** of the OpenRGB controller name. |
 | `devices[].group` | `near`, `far`, or `excluded`. |
 | `devices[].bus` | `usb` or `smbus`, selecting which rate applies. |
@@ -209,6 +228,11 @@ the daemon writes on every tick rather than only on change.
 | SIGTERM / logout | Black, then exit |
 | Shutdown | `ExecStop` writes black |
 
+The soundbar is the exception to "no off state": it holds whatever it was last
+sent, and has its own power supply. Black is still written on every exit path,
+so it goes dark with everything else -- and stays dark, in the other OS too,
+until something drives it again.
+
 ## The Commander Core driver
 
 The Corsair Commander Core (`1b1c:0c32`) is driven directly over
@@ -249,6 +273,62 @@ their commands and replies simply interleave. Two contenders are known:
   default but inert until liquidctl is installed — then it goes live at its next
   restart. `scripts/install.sh` warns if it is on. See *Troubleshooting*.
 
+## The Katana driver
+
+The Sound Blaster Katana V2X (`041e:3283`, and the V2 at `041e:3260`) exposes its
+controls as a **USB CDC ACM serial port** — `/dev/ttyACM0` here, `COM3` on
+Windows — not as HID. The protocol was reverse-engineered and published by
+Rasmus Moorats ([write-up](https://blog.nns.ee/2026/02/20/katana-v2x-re/),
+MIT-licensed [`v2x`](https://git.dog/xx/v2x) crate); `katana_protocol.py`
+translates the lighting part of it and carries the crate's licence notice.
+
+| | |
+|---|---|
+| Connect | Ask for the firmware version. An answer means binary mode already; silence means text mode, and then `whoareyou` → AES-256-GCM challenge → `unlock` → `SW_MODE1` |
+| Frames | `5A op length payload`; lighting is opcode `0x3A`; colours travel as ABGR |
+| Replies | Every setter is acknowledged (`5A 02 0A 3A 00 …`); those are read as they arrive |
+| Tested on | firmware `1.3.230619.1820` |
+
+⚠️ **The soundbar has its own power supply.** Once unlocked it stays in binary
+mode until *it* is power-cycled — rebooting the PC does not reset it. So the
+unlock runs once per soundbar power cycle (about 1.3 s to connect), and every
+start after that finds it ready.
+
+⚠️ **Power-cycled while its USB link stays up, it would ignore every colour in
+silence**, because text mode drops binary frames without a word. The sink asks
+it a question every 5 s and reconnects when one goes unanswered.
+
+⚠️ **Exactly one process may drive it.** The port is opened with pyserial's
+`exclusive=True` — which is only an advisory `flock` — *and* the kernel's
+`TIOCEXCL`, which refuses every further `open()` to anyone but root: a second
+opener gets `Device or resource busy`. A COM port on Windows is exclusive
+anyway; Creative's own app is the contender there.
+
+**It is written as little as possible.** Unlike the Commander Core it *holds*
+its colour, so an unchanged colour is never re-sent, a change must exceed
+`COLOUR_EPSILON`, and `katana.rate_hz` caps the rest at 2 Hz by default. The
+soundbar remembers its lighting across a power cycle, and whether each colour
+write reaches its flash is not documented. Measured here: an ACK to a changed
+colour arrives as fast as one to an unchanged colour (0.3 ms median), 20 Hz is
+sustained with every write acknowledged, and nothing stalls in the fifteen
+seconds after a change — no sign of a synchronous or debounced save. That is
+evidence, not proof, so the default stays low.
+
+🚨 **Hold firmware updates until someone has checked them.** `1.30.260813.1100`
+post-dates the published protocol and its hardcoded key, and a vendor whose
+authentication has been published has every reason to change it.
+
+**Permissions.** The port is created `root:uucp 0660`. `scripts/install.sh`
+installs `udev/60-ambience-rgb-katana.rules`, which tags it `uaccess` and sets
+`ID_MM_DEVICE_IGNORE`, so ModemManager stops probing it with AT commands.
+⚠️ The rule's name must sort **before** `73-seat-late.rules`: `uaccess` is only
+acted on there, so the same line in a `99-*.rules` file silently does nothing.
+Check with `getfacl /dev/ttyACM0` — it must list your user.
+
+Brightness, effects other than a solo colour, and the equaliser are left alone.
+The reference can also upload firmware and read and write device memory; none
+of that is ported, and a test fails if a builder for it appears here.
+
 ## Troubleshooting
 
 **Nothing lights up.** `ambience-rgb devices`. If OpenRGB is unavailable, check
@@ -258,6 +338,21 @@ whose detector got re-enabled, or CoolerControl (next entry). (`devices` opens t
 and skips it entirely while the daemon is running: exactly one process may hold
 that device, and a diagnostic that fights the daemon for it produces protocol
 errors in both.)
+
+**The soundbar does not follow.** Stop the daemon (`systemctl --user stop
+ambience-rgb`) and run `ambience-rgb devices`: it opens the soundbar read-only
+and prints its model, firmware and current colour, or says why it could not.
+
+- *No Sound Blaster Katana on USB* — it is off or unplugged. It is matched by
+  USB IDs only, never by trying whatever `ttyACM` port exists.
+- *Permission denied* — the udev rule is missing or did not apply; see
+  *Permissions* under *The Katana driver*.
+- *Device or resource busy* — another process has the port: `fuser -v
+  /dev/ttyACM0`.
+- *refused the unlock* — the firmware may have changed the key; compare its
+  version with `1.3.230619.1820`.
+
+Each connection logs `katana: Sound Blaster Katana V2X, firmware …, on …`.
 
 **The AIO flickers between its colours and its firmware rainbow every second or
 two.** Another program is driving the Commander Core. The journal says so
@@ -373,7 +468,7 @@ Researched 2026-09-10, written up in
 | | |
 |---|---|
 | **Ducky One 3 TKL RGB** | **Ruled out.** Its RGB is onboard-only — no host lighting software exists, so there is nothing to capture and no protocol to speak. The vendor HID interface is for firmware. All the open-source prior art targets the One **2**, a different vendor ID. |
-| **Sound Blaster Katana V2X** | **Planned, and verified on both OSes.** Already reverse-engineered: CDC ACM (`/dev/ttyACM0` on Linux, `COM3` through the inbox `usbser` driver on Windows), `5A`-framed commands, AES-256-GCM challenge-response, MIT-licensed reference implementation — and the author's unit runs the exact firmware that work was done against. A serial-based sink is the most portable device in the project: no OpenRGB server, no HID. ⚠️ If you own one, hold off on firmware `1.30.260813.1100` until this is verified — it post-dates the published protocol. |
+| **Sound Blaster Katana V2X** | **Driven since 2026-09-10** — see *The Katana driver*. Live on Linux; on Windows it is `COM3` through the inbox `usbser` driver, so the same code will open it once the port lands — the most portable device in the project, needing no OpenRGB server and no HID. ⚠️ If you own one, hold off on firmware `1.30.260813.1100`: it post-dates the published protocol and nobody has checked it. |
 | **Windows** | **Planned.** The only real blocker is the IPC: Windows `AF_UNIX` is `SOCK_STREAM` only, so the datagram socket needs a UDP-on-loopback sibling. Everything else follows the per-platform package pattern matterlights already proves. |
 
 ## Development
@@ -393,7 +488,7 @@ hardware, and one of them takes a person:
 ```bash
 scripts/integration.sh                        # policy + soak
 python tests/integration/check_failures.py    # restarts/kills services
-python tests/integration/check_hardware.py    # asks you what you saw
+python tests/integration/check_hardware.py    # asks you what you saw: AIO, then soundbar
 ```
 
 🚨 **`check_hardware.py` is the only check here that can fail for the reason

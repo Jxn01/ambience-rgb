@@ -1,0 +1,12 @@
+# Sound Blaster Katana V2X / V2 control port, for ambience-rgb.
+#
+# Gives the logged-in seat user access to the soundbar's CDC ACM serial port,
+# and keeps ModemManager away from it: by USB class it is an "Abstract (modem)"
+# interface, and ModemManager's AT-command probes are not something to send to
+# a soundbar.
+#
+# ⚠️ The filename must sort BEFORE 73-seat-late.rules. TAG+="uaccess" is only
+# acted on there, so the same line in a 99-*.rules file silently does nothing.
+# Verify with `getfacl /dev/ttyACM0` -- the ACL is the check, not this file.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="041e", ATTRS{idProduct}=="3283", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="041e", ATTRS{idProduct}=="3260", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"

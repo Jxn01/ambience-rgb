@@ -65,6 +65,22 @@ class ParsingTest(unittest.TestCase):
                 {**MINIMAL, "devices": [{"match": "x", "zones": {"A": "sideways"}}]}
             )
 
+    def test_every_rejection_is_a_config_error(self) -> None:
+        # The CLI turns a ConfigError into a clean one-line message and exit 2.
+        # A bare ValueError from a helper escapes that and prints a traceback,
+        # which is how a typo in saturation used to present.
+        for section in (
+            {"colour": {"saturation": 0}},
+            {"colour": {"group_cohesion": 2}},
+            {"spread": {"bias": -1}},
+            {"devices": [{"match": "x", "channel_order": "RGX"}]},
+            {"devices": [{"match": "x", "static": "#12345"}]},
+            {"devices": [{"match": "x", "static": [1, 2, 300]}]},
+        ):
+            with self.subTest(section=section):
+                with self.assertRaises(ConfigError):
+                    parse_config({**MINIMAL, **section})
+
     def test_xdg_runtime_dir_falls_back_when_unset(self) -> None:
         """The shutdown unit runs as root with no XDG_RUNTIME_DIR."""
 
@@ -135,6 +151,47 @@ class MatchingTest(unittest.TestCase):
         self.assertEqual(config.rule_for("Corsair Dominator Titanium").group, GROUP_FAR)
 
 
+class SingleColourDeviceTest(unittest.TestCase):
+    """The Commander Core and the Katana: devices configured by group, not by rule."""
+
+    def test_the_katana_is_off_unless_asked_for(self) -> None:
+        # A config written before the Katana existed must not start retrying a
+        # missing serial port every ten seconds, forever.
+        katana = parse_config(MINIMAL).katana
+        self.assertFalse(katana.enabled)
+        self.assertEqual(katana.group, GROUP_FAR)
+        self.assertIsNone(katana.port)
+
+    def test_a_katana_section_parses(self) -> None:
+        katana = parse_config(
+            {**MINIMAL, "katana": {"enabled": True, "group": "near", "rate_hz": 4, "port": "/dev/ttyACM3"}}
+        ).katana
+        self.assertTrue(katana.enabled)
+        self.assertEqual(katana.group, GROUP_NEAR)
+        self.assertAlmostEqual(katana.interval_seconds, 0.25)
+        self.assertEqual(katana.port, "/dev/ttyACM3")
+
+    def test_the_katana_rate_must_be_positive(self) -> None:
+        for rate in (0, -2, "fast"):
+            with self.subTest(rate=rate):
+                with self.assertRaises(ConfigError):
+                    parse_config({**MINIMAL, "katana": {"rate_hz": rate}})
+
+    def test_excluded_is_refused_where_it_cannot_mean_anything(self) -> None:
+        # 🚨 These devices are written whole, so a group of "excluded" cannot
+        # leave part of one alone. It used to be accepted -- and then quietly
+        # driven with the FAR colour, the opposite of what it says.
+        for section in (
+            {"katana": {"group": "excluded"}},
+            {"commander": {"pump_group": "excluded"}},
+            {"commander": {"fan_group": "excluded"}},
+        ):
+            with self.subTest(section=section):
+                with self.assertRaises(ConfigError) as caught:
+                    parse_config({**MINIMAL, **section})
+                self.assertIn("enabled = false", str(caught.exception))
+
+
 class ShippedConfigTest(unittest.TestCase):
     """The example config is the fallback, so it must actually be valid."""
 
@@ -144,6 +201,8 @@ class ShippedConfigTest(unittest.TestCase):
 
         self.assertEqual(config.openrgb_host, "127.0.0.1", "never bind the LAN")
         self.assertTrue(config.commander.enabled)
+        self.assertTrue(config.katana.enabled)
+        self.assertEqual(config.katana.group, GROUP_FAR, "it lights the desk, not the screen")
 
         expected = {
             "Alienware AW3225QF": GROUP_NEAR,

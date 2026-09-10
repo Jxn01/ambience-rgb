@@ -495,6 +495,135 @@ The docs said "exactly one process may hold this device" and named only OpenRGB.
 Both halves were incomplete: hidraw lets any number of processes hold it — the
 rule is about *driving* it — and a second driver was waiting for a package.
 
+## 2026-09-10, evening: the Katana V2X
+
+The soundbar is a sink now: `katana_protocol.py` (pure; byte-exact tests against
+the reference's literal arrays and a captured auth pair), `katana.py` (the serial
+transport, tested against a simulated soundbar that checks the unlock with real
+AES-GCM), `KatanaSink`, a `[katana]` block, a `devices` line, a `check_hardware`
+phase and the udev rule. 293 unit tests. Five mutation passes over the new code
+killed 37 of 38 mutants; the survivor is below.
+
+### First contact, through the production driver
+
+The soundbar was in text mode, and met the binary probe with **complete
+silence** — no `Unknown command`, nothing. Then, byte for byte:
+
+| Sent | Came back |
+|---|---|
+| `whoareyou` | the challenge in 0.4 ms: header `1E 04`, PID `83 32`, 32-byte nonce, CR LF |
+| `unlock` + 64 bytes | `unlock_OK` in 0.7 ms — the key and the GCM construction right first time |
+| `SW_MODE1`, then the firmware query | `5a 09 12 02 10 "1.3.230619.1820\0"`, byte-identical to the published capture |
+| the colour query | a 0.2 ms round trip; the solo colour read back `#047803` |
+| a solo colour | **an acknowledgement**: `5a 02 0a 3a 00 2b 00 01 01 01 00 00 00` |
+
+The unlock runs once per *soundbar* power cycle, so that was its one real test
+until the soundbar is next switched off. Every start since takes the
+binary-mode path.
+
+The root shutdown path ran live as well, exactly as `ambience-rgb-lights-off`
+runs it (`sudo env AMBIENCE_RGB_CONFIG=… ambience-rgb -v off`, daemon stopped):
+the probe answered, the soundbar was prepared and blacked, and it exited 0 with
+no warning. Root ignores the udev ACL, and the user daemon's `flock` and
+`TIOCEXCL` are gone once it has stopped, so nothing stands in its way.
+
+### Is every colour saved to flash?
+
+The soundbar keeps its lighting across a power cycle, so something is saved.
+Whether it is *every* write matters for a device written at the screen's pace.
+A NOR sector erase blocks for tens of milliseconds, so a synchronous save would
+show as a slower ACK to a changed colour, and a debounced one as a stall some
+seconds later. One unit of red — invisible — was toggled:
+
+| | median | max |
+|---|---|---|
+| ACK, colour unchanged (20) | 0.31 ms | 1.2 ms |
+| ACK, colour changed (20) | 0.31 ms | 2.2 ms |
+| ACK, 20 Hz burst (50) | 0.30 ms | 3.0 ms |
+| query round trip, 15 s after the last change (297) | 0.34 ms | 3.6 ms |
+
+No stall anywhere, every write acknowledged with status `00`. Evidence against
+per-write saving, not proof — an asynchronous save would not show — so the sink
+sends nothing it need not (a change filter, no refresh) and caps at 2 Hz until a
+power-cycle test says whether colour writes persist at all.
+
+### Traps the reference does not warn about
+
+- 🚨 **pyserial's `exclusive=True` is an advisory `flock`, not exclusivity.** It
+  stops only programs that ask for the same lock. `TIOCEXCL` is set as well, and
+  with the daemon running a second `open()` of the tty fails `EBUSY` — verified
+  live.
+- 🚨 **`TAG+="uaccess"` does nothing in a `99-*.rules` file.** It is acted on
+  only by `73-seat-late.rules`, so the rule is named `60-`. The reference's `99-`
+  works only because it uses `MODE="0666"`. The check is `getfacl`, not the file.
+- **The reference reads the challenge as a line**, and the nonce is binary: a
+  nonce containing CR LF cuts it short, and only its NotYet retry papers over
+  that. Ours reads by length.
+- **The reference treats `FFFFFFFF` as an unused colour slot** — and solo white
+  *is* `FF FF FF FF` in ABGR, so white would read back as no colour at all.
+- **The reference's mode probe accepts any frame**, while noting itself that text
+  mode sends status frames. Ours probes with the firmware query, whose answer an
+  unrelated frame cannot impersonate.
+- **The reference falls back to any `ttyACM` port** and sends it `whoareyou`.
+  Ours matches USB IDs or refuses.
+- **Setters are acknowledged, and nothing waits for the ACKs.** Unread, 13 bytes
+  a write fill a tty buffer in minutes; every write takes in what is waiting.
+- **The reference waits out `NotYet` with up to six 1 s sleeps** — right for a
+  CLI, wrong in a daemon, where the sleep is inside the tick and freezes every
+  other sink, the Commander Core included, exactly when the soundbar has just
+  been switched on. Caught in review, the same class as the 1000 ms HID read
+  timeout. The daemon's sink opens with `not_yet_retries=0`, so `NotYet` is a
+  failure and `ResilientSink`'s retry is the wait; the one-shot tools keep the
+  patient default.
+
+### Found on the way, fixed as classes
+
+- `commander.pump_group = "excluded"` was accepted and then **driven with the far
+  colour** — the opposite of what it says. Devices written whole now refuse
+  `excluded` and point at `enabled = false`.
+- Four config helpers raised a bare `ValueError`, which the CLI does not catch:
+  a typo in `saturation` printed a traceback. They raise `ConfigError` now, and a
+  test covers each.
+- The OpenRGB change filter compared signatures with `zip()`, which stops at the
+  shorter one: **a colour joining the palette was no change**, and waited for the
+  2 s refresh. The comparison is one shared `_moved()` now, used by both
+  filtering sinks, and a different count is a change.
+- `ambience-rgb devices` returned from inside the Commander branch while the
+  daemon was up, so any device listed after it would never have been printed.
+- 🚨 **Stopping the daemon could leave the AIO lit.** Caught in the journal of the
+  restart that deployed the Katana, to the microsecond: SIGTERM at `.553151`; the
+  Commander write in flight fails at `.553378`, because hidapi reports the
+  interrupted `poll()` as `read error`; `RGB off; stopped` at `.553560`.
+  Blacking a HID device takes milliseconds, and this took 0.18 ms because it
+  never happened: the failure had marked the sink degraded, and
+  `ResilientSink.black()` went through the same retry backoff as a tick, so the
+  shutdown's black was skipped without a word. A plain `systemctl --user stop`
+  or a logout left the AIO to drift back to its firmware rainbow; only the
+  system shutdown unit covered for it. `black()` is called from exit paths only,
+  so it now always gets its one attempt, and a failed one is always logged.
+  **Confirmed live, as an A/B:** three stops that afternoon, and SIGTERM
+  interrupted a Commander read in *every one* — so this was the normal case, not
+  an unlucky one. The two on the old code went from the failure to `RGB off` in
+  0.2 ms and 1.5 ms, blacking nothing. The one on the fixed code reopened the
+  Commander, logged `commander-core: recovered`, and stopped 493 ms after
+  SIGTERM with the black delivered.
+
+### The mutant that survived
+
+Removing the drain before `whoareyou` passes every test. The auth parser looks
+for the challenge first, so stale bytes matter only if an old `Unknown command`
+arrives ahead of a slow challenge — which then fails `SW_MODE1` and heals on the
+next retry. Kept as hygiene, mirroring the reference; not worth a timing model in
+the fake.
+
+### Still open
+
+- **Eyes.** Only the owner can say the light bar follows the room colour.
+- **Audio.** Colour writes share the soundbar's USB link with playback. Nothing
+  is known to glitch, and nobody has listened for it yet.
+- **Persistence.** Set a distinctive colour, power the soundbar off and on, read
+  it back. That settles the flash question, and runs the unlock a second time.
+
 ## Deliberately not done
 
 - **Custom colours and patterns** drive the bulbs only; the RGB goes black in
@@ -508,4 +637,5 @@ rule is about *driving* it — and a second driver was waiting for a package.
 
 `ambience-rgb-openrgb`, `ambience-rgb` and `matterlights-sync`/`-dashboard` are
 enabled and active; `ambience-rgb-lights-off` is armed. The RGB follows the screen
-while the lamps stay off, which is the state the owner left the lamps in.
+while the lamps stay off, which is the state the owner left the lamps in. Since
+the evening of 2026-09-10 the soundbar's light bar follows the far group too.

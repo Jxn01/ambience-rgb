@@ -83,6 +83,23 @@ enabled = true
 pump_group = "far"
 fan_group = "far"
 
+[katana]
+# The Sound Blaster Katana V2X soundbar, driven over its USB serial port by our
+# own driver (OpenRGB has none). It lights the desk, not the screen: "far".
+#
+# rate_hz is a CEILING, not a rate. A colour is sent only when it has really
+# changed, and an unchanged one is never re-sent, because the soundbar holds
+# its colour. Kept low deliberately: the soundbar remembers its lighting across
+# a power cycle, and whether every colour write reaches its flash is not known.
+# A write that is never sent cannot wear anything.
+#
+# Needs the udev rule that scripts/install.sh installs, so that this user can
+# open the port and ModemManager leaves it alone.
+enabled = true
+group = "far"
+rate_hz = 2.0
+# port = "/dev/ttyACM0"   # unset: found by its USB IDs, 041e:3283 or 041e:3260
+
 # --- devices ---------------------------------------------------------------
 # `match` is a case-insensitive SUBSTRING of the OpenRGB controller name, not an
 # exact match, because OpenRGB renames devices between versions.

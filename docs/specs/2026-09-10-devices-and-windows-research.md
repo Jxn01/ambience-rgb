@@ -1,12 +1,12 @@
 # Research: two more devices, and a Windows port
 
 Three questions, answered with evidence gathered on `jxn-garuda` on 2026-09-10.
-One is ruled out, two are planned.
+One is ruled out, one has since been built, and one is planned.
 
 | | Verdict | Confidence |
 |---|---|---|
 | Ducky One 3 TKL RGB | **Ruled out** — no host lighting protocol exists to speak | High |
-| Sound Blaster Katana V2X | **Planned, verified on both OSes** — reverse-engineered by someone else; our firmware is the exact tested version; Windows binds it to inbox `usbser` as COM3 | High |
+| Sound Blaster Katana V2X | **Built, 2026-09-10, and live on Linux** — reverse-engineered by someone else; our firmware is the exact tested version; Windows binds it to inbox `usbser` as COM3 | High |
 | Windows port | **Planned** — small hostile surface, pattern already proven next door | Moderate |
 
 ---
@@ -75,7 +75,7 @@ the `+` ACL). A one-line rule would fix it.
 
 ---
 
-## 2. Sound Blaster Katana V2X — planned, verified on Linux and Windows
+## 2. Sound Blaster Katana V2X — built and live on Linux; verified on Windows
 
 `041e:3283`, present, and **someone has already done the hard part.**
 
@@ -124,9 +124,11 @@ Keeps one language, one process, no extra runtime.
 proves fiddlier than it reads. Rejected as the default only because it adds a
 build toolchain and a second process to supervise.
 
-**Order of work:**
+**Order of work** — all done on 2026-09-10. What the device actually said is in
+[EXECUTION-LOG.md](EXECUTION-LOG.md), under *the Katana V2X*.
 
-1. Grant access to `/dev/ttyACM0` (udev rule, matching on `041e:3283`).
+1. ~~Grant access to `/dev/ttyACM0`.~~ **Done:** `udev/60-ambience-rgb-katana.rules`
+   (`uaccess` plus `ID_MM_DEVICE_IGNORE`), installed by `scripts/install.sh`.
 2. ~~Verify our firmware against the tested `1.3.230619.1820`.~~ **Done
    2026-09-10: identical.** It was never answerable from `bcdDevice 10.30`, which an
    earlier draft of this step compared against — `bcdDevice` is the USB device
@@ -134,14 +136,16 @@ build toolchain and a second process to supervise.
    Creative's mobile app. A handshake (`v2x-ctl status`, or our own) is still the
    first thing to run: a matching version is strong evidence the published key
    works, not proof.
-3. Establish the handshake in Python and read `LightingState` back. That readback
-   is valuable: unlike the Commander Core, this device can tell us what it holds.
-4. Add `KatanaSink` + `[katana]` config (`enabled`, `group`, `rate_hz`).
-5. **Measure the sustainable update rate.** Unknown, and a soundbar's LEDs have no
-   reason to accept 20 Hz. Start at 2–5 Hz. The per-bus rate limiter already
-   handles this; the Katana simply becomes its own bus.
-6. Add a Katana phase to `tests/integration/check_hardware.py` — the only check
-   that can fail for the right reason.
+3. ~~Establish the handshake in Python and read the lighting state back.~~
+   **Done:** the unlock succeeded on its first real run, and the colour reads
+   back — unlike the Commander Core, this device can say what it holds.
+4. ~~Add `KatanaSink` + `[katana]` config.~~ **Done:** `enabled`, `group`,
+   `rate_hz`, and `port`.
+5. ~~Measure the sustainable update rate.~~ **Measured:** 20 Hz sustained with
+   every write acknowledged in about 0.3 ms, so the device is not the limit. The
+   default is 2 Hz anyway, for a different reason: whether colour writes are
+   saved to flash is not known.
+6. ~~Add a Katana phase to `tests/integration/check_hardware.py`.~~ **Done.**
 
 ### On Windows: yes — and it is the most portable device of the three
 
@@ -198,7 +202,8 @@ the Katana would still work on both halves from one code path.
   deliberately — and if Creative's mobile app offers it, decline.
 - **It is an audio device.** Colour writes share a link with the audio path;
   verify that streaming colours does not glitch playback. This is the one risk
-  with no precedent in this project.
+  with no precedent in this project. **Still open:** it needs someone listening
+  while the light bar streams.
 - The hardcoded key is model-specific — fine for us, but it means the sink cannot
   be assumed to work on other Sound Blasters.
 

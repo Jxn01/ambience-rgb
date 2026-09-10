@@ -14,4 +14,9 @@ sudo rm -f /etc/systemd/system/ambience-rgb-lights-off.service
 sudo systemctl daemon-reload
 
 "$REPO_ROOT/.venv/bin/python" -m ambience_rgb off 2>/dev/null || true
+
+# After the final `off`, so that it could still reach the soundbar.
+sudo rm -f /etc/udev/rules.d/60-ambience-rgb-katana.rules
+sudo udevadm control --reload
+
 echo "Removed. OpenRGB's Commander Core detector is still disabled; turn it back on in OpenRGB if you want OpenRGB to see the AIO again."

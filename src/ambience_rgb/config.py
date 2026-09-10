@@ -93,6 +93,22 @@ class CommanderConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class KatanaConfig:
+    """The Sound Blaster Katana V2X (or V2) soundbar, over its USB serial port."""
+
+    enabled: bool = False
+    """Off unless asked for: a config written before the Katana existed must not
+    start retrying a missing serial port every ten seconds, forever."""
+    group: str = GROUP_FAR
+    """``near`` or ``far``. A soundbar lights the desk, not the screen."""
+    interval_seconds: float = 0.5
+    """The least time between two colour writes: ``rate_hz`` in the file, 2 Hz
+    by default. A ceiling, not a rate -- see sinks.KatanaSink for why it is low."""
+    port: str | None = None
+    """A serial port to use instead of finding the soundbar by its USB IDs."""
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     socket_path: Path
     openrgb_host: str = "127.0.0.1"
@@ -139,6 +155,7 @@ class Config:
     """
     devices: tuple[DeviceRule, ...] = ()
     commander: CommanderConfig = field(default_factory=CommanderConfig)
+    katana: KatanaConfig = field(default_factory=KatanaConfig)
 
     def rule_for(self, controller_name: str) -> DeviceRule | None:
         for rule in self.devices:
@@ -147,27 +164,44 @@ class Config:
         return None
 
 
+# ⚠️ Every helper below raises ConfigError, never a bare ValueError. The CLI turns
+# a ConfigError into one clean line and exit 2; anything else escapes as a
+# traceback, which is how a typo in `saturation` used to present.
+
+
 def _validate_order(value, where: str) -> str:
     order = str(value).upper()
     if sorted(order) != ["B", "G", "R"]:
-        raise ValueError(
+        raise ConfigError(
             f"{where}.channel_order must be a permutation of RGB, got {value!r}"
         )
     return order
 
 
+def _number(value, where: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as error:
+        raise ConfigError(f"{where} must be a number, got {value!r}") from error
+
+
 def _positive(value, where: str) -> float:
-    number = float(value)
+    number = _number(value, where)
     if number <= 0:
-        raise ValueError(f"{where} must be greater than 0, got {value!r}")
+        raise ConfigError(f"{where} must be greater than 0, got {value!r}")
     return number
 
 
 def _fraction(value, where: str) -> float:
-    number = float(value)
+    number = _number(value, where)
     if not 0.0 <= number <= 1.0:
-        raise ValueError(f"{where} must be between 0 and 1, got {value!r}")
+        raise ConfigError(f"{where} must be between 0 and 1, got {value!r}")
     return number
+
+
+def _rate_interval(value, where: str) -> float:
+    """A rate in Hz, as the interval between writes."""
+    return 1.0 / _positive(value, where)
 
 
 def _validate_static(value, where: str) -> tuple[int, int, int] | None:
@@ -178,18 +212,21 @@ def _validate_static(value, where: str) -> tuple[int, int, int] | None:
     if isinstance(value, str):
         text = value.strip().lstrip("#")
         if len(text) != 6:
-            raise ValueError(f"{where}.static must be #rrggbb, got {value!r}")
+            raise ConfigError(f"{where}.static must be #rrggbb, got {value!r}")
         try:
             return tuple(int(text[i : i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
         except ValueError as error:
-            raise ValueError(f"{where}.static is not a hex colour: {value!r}") from error
+            raise ConfigError(f"{where}.static is not a hex colour: {value!r}") from error
     if not isinstance(value, (list, tuple)) or len(value) != 3:
-        raise ValueError(f"{where}.static must be three numbers or #rrggbb, got {value!r}")
+        raise ConfigError(f"{where}.static must be three numbers or #rrggbb, got {value!r}")
     channels = []
     for channel in value:
-        number = int(channel)
+        try:
+            number = int(channel)
+        except (TypeError, ValueError) as error:
+            raise ConfigError(f"{where}.static channel is not a number: {channel!r}") from error
         if not 0 <= number <= 255:
-            raise ValueError(f"{where}.static channel out of range: {channel!r}")
+            raise ConfigError(f"{where}.static channel out of range: {channel!r}")
         channels.append(number)
     return (channels[0], channels[1], channels[2])
 
@@ -199,6 +236,23 @@ def _validate_group(value: str, where: str) -> str:
     if group not in VALID_GROUPS:
         raise ConfigError(
             f"{where}: group must be one of {', '.join(sorted(VALID_GROUPS))}, got {value!r}"
+        )
+    return group
+
+
+def _validate_sync_group(value, where: str) -> str:
+    """A group for a device written whole in one go: near or far, never excluded.
+
+    🚨 "excluded" cannot leave part of such a device alone. It used to be
+    accepted anyway -- and then driven with the FAR colour, the opposite of
+    what it says. Leaving the device alone is what ``enabled = false`` is for.
+    """
+
+    group = _validate_group(value, where)
+    if group == GROUP_EXCLUDED:
+        raise ConfigError(
+            f"{where}: this device is written whole, so it cannot be excluded by group; "
+            "set enabled = false to leave it alone"
         )
     return group
 
@@ -248,14 +302,7 @@ def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
     rates = payload.get("rates") or {}
 
     def interval(key: str, default: float) -> float:
-        hz = rates.get(key, default)
-        try:
-            hz = float(hz)
-        except (TypeError, ValueError) as error:
-            raise ConfigError(f"rates.{key} must be a number, got {hz!r}") from error
-        if hz <= 0:
-            raise ConfigError(f"rates.{key} must be greater than zero, got {hz}")
-        return 1.0 / hz
+        return _rate_interval(rates.get(key, default), f"rates.{key}")
 
     rules: list[DeviceRule] = []
     for index, entry in enumerate(payload.get("devices") or []):
@@ -291,8 +338,19 @@ def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
     commander_section = payload.get("commander") or {}
     commander = CommanderConfig(
         enabled=bool(commander_section.get("enabled", True)),
-        pump_group=_validate_group(commander_section.get("pump_group", GROUP_FAR), "commander"),
-        fan_group=_validate_group(commander_section.get("fan_group", GROUP_FAR), "commander"),
+        pump_group=_validate_sync_group(
+            commander_section.get("pump_group", GROUP_FAR), "commander.pump_group"
+        ),
+        fan_group=_validate_sync_group(
+            commander_section.get("fan_group", GROUP_FAR), "commander.fan_group"
+        ),
+    )
+    katana_section = payload.get("katana") or {}
+    katana = KatanaConfig(
+        enabled=bool(katana_section.get("enabled", False)),
+        group=_validate_sync_group(katana_section.get("group", GROUP_FAR), "katana.group"),
+        interval_seconds=_rate_interval(katana_section.get("rate_hz", 2.0), "katana.rate_hz"),
+        port=str(katana_section.get("port") or "").strip() or None,
     )
 
     return Config(
@@ -308,6 +366,7 @@ def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
         spread_bias=_fraction(spread_section.get("bias", 1.0), "spread.bias"),
         devices=tuple(rules),
         commander=commander,
+        katana=katana,
     )
 
 

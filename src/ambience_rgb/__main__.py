@@ -74,6 +74,11 @@ def _devices(config) -> int:
     except OpenRGBError as error:
         print(f"  OpenRGB unavailable: {error}")
 
+    # Exactly one process may hold each of these devices. Opening one here while
+    # the daemon drives it would interleave with its traffic and desync both.
+    held = daemon_is_listening(config.socket_path)
+    held_note = "      held by the running daemon; not opened (stop ambience-rgb to inspect)"
+
     if config.commander.enabled:
         from ambience_rgb.commander_core import CommanderCore, CommanderCoreError
 
@@ -81,19 +86,37 @@ def _devices(config) -> int:
             f"\n  Corsair Commander Core (own driver)      "
             f"pump={config.commander.pump_group} fans={config.commander.fan_group}"
         )
-        if daemon_is_listening(config.socket_path):
-            # Exactly one process may hold this device. Opening it here would
-            # interleave reads with the daemon's and desync both.
+        if held:
             print(header)
-            print("      held by the running daemon; not opened (stop ambience-rgb to inspect)")
-            return 0
+            print(held_note)
+        else:
+            try:
+                with CommanderCore(read_only=True) as device:
+                    print(header)
+                    print(f"      pump {device.pump_leds} LEDs, ports {device.port_leds}")
+            except CommanderCoreError as error:
+                print(f"\n  Commander Core unavailable: {error}")
 
-        try:
-            with CommanderCore(read_only=True) as device:
-                print(header)
-                print(f"      pump {device.pump_leds} LEDs, ports {device.port_leds}")
-        except CommanderCoreError as error:
-            print(f"\n  Commander Core unavailable: {error}")
+    if config.katana.enabled:
+        from ambience_rgb.katana import Katana, KatanaError
+
+        header = (
+            f"\n  Sound Blaster Katana (own driver)        "
+            f"group={config.katana.group}, at most {1 / config.katana.interval_seconds:g} Hz"
+        )
+        if held:
+            print(header)
+            print(held_note)
+        else:
+            try:
+                # Read-only: a diagnostic must never black the soundbar on its way out.
+                with Katana(config.katana.port, read_only=True) as device:
+                    colour = "#%02x%02x%02x" % device.read_colour()
+                    print(header)
+                    print(f"      {device.model} on {device.path}, firmware {device.firmware}")
+                    print(f"      solo colour now {colour}")
+            except (KatanaError, OSError) as error:
+                print(f"\n  Katana unavailable: {error}")
     return 0
 
 

@@ -564,6 +564,66 @@ class ReleaseOnFailureTest(unittest.TestCase):
         self.assertIsNone(sink._device)
 
 
+class ExitPathBlackTest(unittest.TestCase):
+    """🚨 black() is what every exit path writes, so the retry backoff must not skip it.
+
+    Observed 2026-09-10, to the microsecond: SIGTERM at .553151; the Commander
+    write in flight fails at .553378 -- hidapi reports the interrupted poll() as
+    "read error" -- which marks the sink degraded; "RGB off; stopped" at .553560.
+    Blacking a HID device takes milliseconds. It took 0.18 ms because it never
+    happened: the backoff meant for normal ticks swallowed the shutdown's black,
+    and the AIO was left to drift back to its firmware rainbow.
+    """
+
+    def setUp(self) -> None:
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    class _Flaky:
+        name = "flaky"
+
+        def __init__(self) -> None:
+            self.blacks = 0
+
+        def write(self, near, far, palette=None) -> None:
+            raise OSError("read error")
+
+        def black(self) -> None:
+            self.blacks += 1
+
+        def release(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def test_black_is_attempted_inside_the_retry_backoff(self) -> None:
+        from ambience_rgb.sinks import ResilientSink
+
+        inner = self._Flaky()
+        sink = ResilientSink(inner, logging.getLogger("test"), retry_seconds=60.0)
+        sink.write(NEAR, FAR)
+        self.assertTrue(sink.degraded)
+        self.assertTrue(sink.black(), "the exit path's black was skipped")
+        self.assertEqual(inner.blacks, 1)
+
+    def test_writes_still_back_off(self) -> None:
+        # The backoff itself stays: a dead device is not hammered every tick.
+        from ambience_rgb.sinks import ResilientSink
+
+        calls = []
+
+        class Counting(self._Flaky):
+            def write(self, near, far, palette=None) -> None:
+                calls.append(1)
+                raise OSError("read error")
+
+        sink = ResilientSink(Counting(), logging.getLogger("test"), retry_seconds=60.0)
+        for _ in range(5):
+            sink.write(NEAR, FAR)
+        self.assertEqual(len(calls), 1)
+
+
 class CommanderWritesEveryTickTest(unittest.TestCase):
     """🚨 The Commander Core must be written on EVERY tick, unfiltered.
 
@@ -682,6 +742,20 @@ class PaletteReachesTheWireTest(unittest.TestCase):
         moved = [((0, 255, 255), 0.4), ((255, 255, 0), 0.35), ((255, 0, 255), 0.25)]
         sink.write(NEAR, FAR, moved)
         self.assertEqual(len(client.writes), 1, "a moving palette must keep being written")
+
+    def test_a_palette_that_gains_or_loses_a_colour_is_resent(self) -> None:
+        """🚨 Signatures were compared with zip(), which stops at the shorter one
+        -- so a colour joining the palette was no change at all, and the gradient
+        waited for the refresh timer to show it."""
+
+        sink, client = self._sink([(6, (("far", 40, "RGB"),), "usb", False)], 0.0)
+        sink.write(NEAR, FAR, self.PALETTE)
+        client.writes.clear()
+        sink.write(NEAR, FAR, self.PALETTE + [((255, 255, 255), 0.1)])
+        self.assertEqual(len(client.writes), 1, "a colour joined the palette")
+        client.writes.clear()
+        sink.write(NEAR, FAR, self.PALETTE)
+        self.assertEqual(len(client.writes), 1, "a colour left the palette")
 
     def test_each_group_keeps_its_own_base(self) -> None:
         """near/far survives the gradient; it is a real choice about the room."""

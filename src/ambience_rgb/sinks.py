@@ -1,14 +1,14 @@
-"""Where colours go: OpenRGB's devices, and the Commander Core.
+"""Where colours go: OpenRGB's devices, the Commander Core, and the Katana.
 
-Both sinks present the same tiny interface, and both are **best effort**. A sink
-that raises is logged once, marked degraded, and retried on a timer; it never
-takes the daemon down. Losing the AIO must not stop the motherboard syncing, and
-losing the OpenRGB server must not stop the AIO.
+Every sink presents the same tiny interface, and every one is **best effort**. A
+sink that raises is logged once, marked degraded, and retried on a timer; it
+never takes the daemon down. Losing the AIO must not stop the motherboard
+syncing, and losing the OpenRGB server must not stop the AIO.
 
 That is not defensive habit, it is the actual failure mode: the OpenRGB server
 is a separate process that can be restarted or crash on its own (a RESIZEZONE on
-this rig's Commander Core kills 1.0rc3 outright), and the AIO is a USB device
-that can be unplugged.
+this rig's Commander Core kills 1.0rc3 outright), and the AIO and the soundbar
+are USB devices that can be unplugged or switched off.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from ambience_rgb.config import (
     CommanderConfig,
     Config,
     DeviceRule,
+    KatanaConfig,
 )
 from ambience_rgb.openrgb_client import OpenRGBClient, OpenRGBError
 from ambience_rgb.render import apply_channel_order, spread
@@ -42,6 +43,12 @@ RETRY_SECONDS = 10.0
 # almost exactly long enough to guarantee the fans flash green on any hiccup.
 # Its backoff must stay comfortably under that revert time.
 COMMANDER_RETRY_SECONDS = 2.0
+
+# How often the Katana is asked a question to prove it is still listening. See
+# Katana.keepalive: a soundbar power-cycled with its USB link still up drops
+# back into a mode that ignores colour writes in silence, and nothing else here
+# would ever notice.
+KATANA_KEEPALIVE_SECONDS = 5.0
 
 # How often an UNCHANGED colour is written again. The devices need an occasional
 # refresh so a controller that was reset or re-detected does not sit on a stale
@@ -114,6 +121,25 @@ def released_on_failure(sink) -> Iterator[None]:
         raise
 
 
+def _moved(before: tuple[RGB, ...], after: tuple[RGB, ...]) -> bool:
+    """Whether any channel of any colour moved by at least COLOUR_EPSILON.
+
+    Shared by every sink with a change filter, so "changed enough to send"
+    means one thing everywhere.
+
+    A different COUNT of colours is a move too. zip() alone stops at the shorter
+    signature, so a colour joining the palette used to be no change at all.
+    """
+
+    if len(before) != len(after):
+        return True
+    return any(
+        abs(a - b) >= COLOUR_EPSILON
+        for colour, previous in zip(after, before)
+        for a, b in zip(colour, previous)
+    )
+
+
 class Sink(Protocol):
     name: str
 
@@ -142,14 +168,16 @@ class ResilientSink:
     def degraded(self) -> bool:
         return self._failed_at is not None
 
-    def _guard(self, action: str, call) -> bool:
+    def _guard(self, action: str, call, *, force: bool = False) -> bool:
         now = time.monotonic()
-        if self._failed_at is not None and (now - self._failed_at) < self._retry_seconds:
+        if not force and self._failed_at is not None and (now - self._failed_at) < self._retry_seconds:
             return False
         try:
             call()
         except Exception as error:  # noqa: BLE001 - a sink may not kill the daemon
-            if self._failed_at is None:
+            # A forced attempt is logged every time: there is no later retry to
+            # show up in the journal instead.
+            if self._failed_at is None or force:
                 self._logger.warning("%s: %s failed (%s); will retry", self.name, action, error)
             self._failed_at = now
             return False
@@ -162,7 +190,17 @@ class ResilientSink:
         return self._guard("write", lambda: self._sink.write(near, far, palette))
 
     def black(self) -> bool:
-        return self._guard("black", self._sink.black)
+        """Always attempted, backoff or not: black is what every exit path writes.
+
+        🚨 SIGTERM can land mid-write -- hidapi reports the interrupted poll() as
+        "read error" -- and that failure marks the sink degraded a fraction of a
+        millisecond before the shutdown blacks it. With the backoff applied here
+        the shutdown's black was skipped without a word, and the AIO was left to
+        drift back to its firmware rainbow. The backoff is for ticks, which come
+        again; an exit path does not.
+        """
+
+        return self._guard("black", self._sink.black, force=True)
 
     def release(self) -> None:
         try:
@@ -476,11 +514,7 @@ class OpenRGBSink:
         colours_before, when = previous
         if (now - when) >= REFRESH_SECONDS:
             return True
-        return any(
-            abs(a - b) >= COLOUR_EPSILON
-            for colour, before in zip(colours, colours_before)
-            for a, b in zip(colour, before)
-        )
+        return _moved(colours_before, colours)
 
     def _send_colours(
         self, device: int, segments: tuple, per_zone: bool, near: RGB, far: RGB,
@@ -599,22 +633,132 @@ class CommanderCoreSink:
             self._device = None
 
 
+class KatanaSink:
+    """Drives the Sound Blaster Katana's lighting through its serial port.
+
+    The opposite trade to the Commander Core, for the opposite device. The
+    Commander forgets its colour within ten seconds, so it is written on every
+    tick; the soundbar HOLDS its colour indefinitely, so it is written only when
+    the colour has really changed, never on a refresh timer, and never faster
+    than ``rate_hz``.
+
+    ⚠️ The frugality is also insurance. The soundbar keeps its lighting across
+    a power cycle, so some setting is saved somewhere, and whether every colour
+    write reaches its flash is not documented. A write that is never sent
+    cannot wear anything.
+    """
+
+    name = "katana"
+
+    def __init__(
+        self,
+        katana: KatanaConfig,
+        logger: logging.Logger | None = None,
+        bias: float = 1.0,
+        treatment: dict | None = None,
+        *,
+        device_factory=None,
+        clock=time.monotonic,
+    ) -> None:
+        self._config = katana
+        self._logger = logger or LOGGER
+        self._bias = bias
+        self._treatment = treatment or {}
+        self._device_factory = device_factory or self._open_device
+        self._clock = clock
+        self._device = None
+        self._sent: RGB | None = None
+        self._written_at: float | None = None
+        self._asked_at = 0.0
+
+    def _open_device(self):
+        from ambience_rgb.katana import Katana
+
+        # 🚨 No NotYet retries here. Each one sleeps a second, up to six times,
+        # and in the daemon that sleep is inside the tick: every other sink
+        # would freeze with it, the Commander Core included -- which reverts to
+        # its firmware pattern after ten seconds unwritten. NotYet is a failure
+        # instead, and ResilientSink's retry is the wait.
+        return Katana(self._config.port, logger=self._logger, not_yet_retries=0).open()
+
+    def connect(self) -> None:
+        device = self._device_factory()
+        try:
+            device.prepare()
+        except Exception:
+            device.release()
+            raise
+        self._device = device
+        self._sent = None
+        self._asked_at = self._clock()
+        self._logger.info(
+            "katana: %s, firmware %s, on %s", device.model, device.firmware, device.path
+        )
+
+    def write(self, near: RGB, far: RGB, palette: list | None = None) -> None:
+        if self._device is None:
+            self.connect()
+        assert self._device is not None
+        now = self._clock()
+        base = near if self._config.group == GROUP_NEAR else far
+        colour = spread(palette or [], base, 1, bias=self._bias, treatment=self._treatment)[0]
+        with released_on_failure(self):
+            # Before the filters, deliberately: a static screen is exactly when
+            # nothing else would notice that the soundbar stopped listening.
+            if now - self._asked_at >= KATANA_KEEPALIVE_SECONDS:
+                self._asked_at = now
+                self._device.keepalive()
+            if self._written_at is not None and now - self._written_at < self._config.interval_seconds:
+                return
+            if self._sent is not None and not _moved((self._sent,), (colour,)):
+                return
+            self._device.set_colour(colour)
+        self._sent = colour
+        self._written_at = now
+
+    def black(self) -> None:
+        """Unconditional, like every sink's black: it is what exit paths write."""
+
+        if self._device is None:
+            self.connect()
+        assert self._device is not None
+        with released_on_failure(self):
+            self._device.black()
+        self._sent = (0, 0, 0)
+
+    def release(self) -> None:
+        """Drop the port without blacking -- see Katana.release."""
+
+        if self._device is not None:
+            self._device.release()
+            self._device = None
+
+    def close(self) -> None:
+        if self._device is not None:
+            self._device.close()
+            self._device = None
+
+
 def build_sinks(config: Config, logger: logging.Logger | None = None) -> list[ResilientSink]:
     """Every configured sink, each wrapped so one failure cannot stop the rest."""
 
     log = logger or LOGGER
+    treatment = {"saturation": config.saturation, "gamma": config.gamma}
     sinks: list[ResilientSink] = [ResilientSink(OpenRGBSink(config, log), log)]
     if config.commander.enabled:
         # A shorter backoff, because this device forgets: see
         # COMMANDER_RETRY_SECONDS.
         sinks.append(
             ResilientSink(
-                CommanderCoreSink(
-                    config.commander, log, config.spread_bias,
-                    {"saturation": config.saturation, "gamma": config.gamma},
-                ),
+                CommanderCoreSink(config.commander, log, config.spread_bias, treatment),
                 log,
                 COMMANDER_RETRY_SECONDS,
             )
+        )
+    if config.katana.enabled:
+        # The standard backoff: the soundbar holds its colour, so nothing is
+        # lost on it while a retry waits.
+        sinks.append(
+            ResilientSink(KatanaSink(config.katana, log, config.spread_bias, treatment), log)
         )
     return sinks

@@ -9,7 +9,7 @@ scripts/integration.sh            # policy + soak, the two safe ones
 python tests/integration/check_policy.py
 python tests/integration/check_soak.py 600
 python tests/integration/check_failures.py    # restarts and kills services
-python tests/integration/check_hardware.py    # asks you what you saw
+python tests/integration/check_hardware.py    # asks you what you saw: AIO, then soundbar
 ```
 
 ## Why these exist
@@ -46,6 +46,12 @@ payload, which spans many packets, was being truncated.
 **Only `check_hardware.py` can fail for that reason**, because it asks a person.
 Run it whenever the transport, the packet framing or the report size changes, and
 before believing any claim that the lights work.
+
+It covers both devices this project drives with its own code: the Commander Core,
+then the Katana soundbar. The soundbar phase writes each colour **once** -- the
+device holds its colour, unlike the AIO -- prints what the soundbar reports back
+alongside, and restores the colour it found. It refuses to run while the daemon
+is up, because exactly one process may drive each of these devices.
 
 ## The first thing to check when the AIO is dark but everything looks healthy
 

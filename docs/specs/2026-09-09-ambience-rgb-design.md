@@ -14,19 +14,22 @@ AIO controller, and is useless anywhere else. Windows already has better tooling
 for this. None of that belongs in matterlights, which is public, cross-platform
 and general — but it still deserves version control, so it lives here.
 
-> **Superseded, 2026-09-10.** Two of those three claims no longer hold, and the
+> **Superseded, 2026-09-10.** None of those three claims holds any more, and the
 > project was renamed from `linux-rgb` to `ambience-rgb` because of it.
 >
-> * **Not private.** It is public.
+> * **Not private for long.** It is being made public.
 > * **Not machine-specific by construction.** It never was — the device set
 >   lives in TOML, and `config.example.toml` is one rig's answer, not a
 >   hard-coded one. The paragraph above overstated it.
-> * **Still Linux-only, but only at the transport.** The one genuinely
->   Linux-bound piece is the `AF_UNIX SOCK_DGRAM` socket. "Windows already has
->   better tooling for this" is also withdrawn: the decision is that this will
->   *replace* iCUE and SignalRGB rather than coexist with them, which removes
->   the contention that made a Windows port look unattractive. See
->   [2026-09-10-devices-and-windows-research.md](2026-09-10-devices-and-windows-research.md).
+> * **Not Linux-only.** The one genuinely Linux-bound piece was the
+>   `AF_UNIX SOCK_DGRAM` socket; Windows gets UDP on the loopback instead, and
+>   the port was built the same evening -- though it has not yet run on
+>   Windows. "Windows already has better tooling for this" is withdrawn as well:
+>   the decision is that this *replaces* iCUE and SignalRGB rather than
+>   coexisting with them, which removes the contention that made a Windows port
+>   look unattractive. See
+>   [2026-09-10-devices-and-windows-research.md](2026-09-10-devices-and-windows-research.md)
+>   §3, and the Windows section of [EXECUTION-LOG.md](EXECUTION-LOG.md).
 
 ## Scope
 
@@ -34,7 +37,8 @@ and general — but it still deserves version control, so it lives here.
 already computed for the Matter bulbs, and are mirrored onto local RGB hardware.
 
 **Out:** zoned and shared-variant modes, custom colours and patterns, any
-capture of its own, any Home Assistant contact, Windows, any other machine.
+capture of its own, any Home Assistant contact. (Windows was out as well, at
+first; see the note above.)
 
 ## The one-capture constraint
 

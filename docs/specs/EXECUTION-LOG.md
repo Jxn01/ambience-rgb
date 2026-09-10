@@ -624,6 +624,152 @@ the fake.
 - **Persistence.** Set a distinctive colour, power the soundbar off and on, read
   it back. That settles the flash question, and runs the unlock a second time.
 
+## 2026-09-10, night: the Windows port
+
+Built from Linux in one session, for a half of the machine that boots *instead*
+of this one. Every blocker in the research doc's §3 now has code behind it;
+nothing has run on Windows yet. The README's *Windows: what is verified, and
+what is not* is the checklist for the first boot there.
+
+### Read the other half's disk before guessing about it
+
+The Windows install sits on this machine's own NVMe, so it can be *read* from
+Linux: mounted read-only at `/mnt/windows-c` (its `noauto` fstab entry), the
+registry hives parsed offline with `regipy` in a scratch venv. That turned four
+design guesses into facts:
+
+- **Python there is 3.12.10**, where this side runs 3.14. The suite now also
+  runs under a standalone 3.12 unpacked into a scratch directory -- which at once
+  caught a test that passed only where `hid` happened to be importable.
+- 🚨 **iCUE's `CorsairService` and `SignalRgb.Service` are set to Automatic.**
+  Only the two programs' *launchers* had been taken out of autostart, so the
+  record that nothing else would drive the Commander Core on Windows was half
+  true. The installer reports both and, with `-DisableCompetitors`, disables them.
+- **OpenRGB is not installed there**, which reshaped the OpenRGB step (below).
+- **matterlights' checkout there is 12 commits behind**, with no `RGB_` lines.
+
+### Decisions
+
+- **UDP on `127.0.0.1:45731`** where there are no unix datagram sockets;
+  `socket.transport = "auto"` picks it. Not `AF_UNIX` + `SOCK_STREAM`: a
+  connection is exactly what a publisher must never be able to block on. The
+  port sits below 49152 because Windows' dynamic range is where Hyper-V and WSL
+  reserve blocks at boot. `SO_EXCLUSIVEADDRUSE`, so nothing shares the port.
+- **Liveness is a bind probe for UDP and a connect probe for the socket file.**
+  A UDP port accepts no connection and has no file. The probe holds the port for
+  an instant; a daemon starting in exactly that instant says so and exits.
+- **One stop command**, `{"command": "stop"}`, because Windows sends a process no
+  signal and the shutdown task needed the daemon to let go of `COM3`. A stop is
+  exit 0, so Task Scheduler never records it as a crash.
+- **The task names are the unit names**, held equal by a test across the units,
+  the PowerShell and the advice the program prints.
+- **The scheduled tasks are XML built by pure PowerShell functions**, so a real
+  pwsh -- a portable one from PowerShell's releases, unpacked in scratch -- renders
+  and parses every task from Linux. The XML that registers is the XML tested.
+- **No self-restart.** Task Scheduler's restart-on-failure covers a failure to
+  *start*; an exit with an error code is not a failure to it, by its
+  documentation and every report found. A repetition trigger would restart a
+  crashed daemon -- and would also undo every deliberate stop within minutes,
+  while the daemon already keeps every sink failure to itself
+  (`ResilientSink._guard` catches everything). Documented instead.
+
+### Traps, each turned into a test
+
+- 🚨 **The shipped config crashed Windows at load.** Its socket path is
+  `$XDG_RUNTIME_DIR/...`; with that unset -- as it always is there -- the fallback
+  called `os.getuid()`, which Windows does not have. Every entry point, the
+  shutdown task included, would have died before touching a light. The unix path
+  is no longer read at all for UDP, `getuid` is looked up with `getattr`, and any
+  unexpanded `$VAR` is a named error. The load-bearing test loads the real file
+  for `win32` with `os.getuid` rigged to explode.
+- 🚨 **`pythonw` has no stderr.** `sys.stderr` is `None`, and a stream handler on
+  it drops every line in silence. Without a console the log goes to a rotating,
+  timestamped file in `%LOCALAPPDATA%\ambience-rgb`.
+- 🚨 **Task Scheduler stops every task after 72 hours** unless told otherwise.
+  Both logon tasks carry `PT0S`, read back out of the rendered XML by a test.
+- **`IgnoreNew` drops a start issued while a stop is still in flight** -- the trap
+  matterlights hit restarting its own tasks. The installer and the Windows
+  OpenRGB restart command stop, wait for the task to leave Running (bounded),
+  then start.
+- **Windows reports a UDP send to a closed port on the NEXT send**
+  (`WSAECONNRESET`), after which the socket is officially unusable. CPython's
+  `socket.ioctl` cannot turn that off -- `SIO_UDP_CONNRESET` is not among the
+  three controls it accepts -- so matterlights' publisher replaces its socket and
+  counts a listener as back only after two clean sends in a row. Otherwise a
+  stopped extension would flap the log twice a second.
+- **`socket.AF_UNIX` does not exist on Windows CPython**, and matterlights'
+  publisher caught only `OSError` around it: an `AttributeError` at the first
+  publish would have taken the sync loop down. Tested against a socket module
+  with the attribute really deleted; here an AST guard keeps `AF_UNIX` inside
+  `transport.py`.
+- **`WM_ENDSESSION` may be the last thing the process sees.** matterlights' hook
+  returns at once because its callback is fire-and-forget; this one holds the
+  message -- up to 4 s -- until the daemon's `finished` event says the black is
+  written and every device released.
+- **A console program started from `pythonw` gets a window of its own.** The
+  OpenRGB restart runs PowerShell, so it passes `CREATE_NO_WINDOW` -- on Windows
+  only, since POSIX rejects the flag.
+- **Windows PowerShell 5.1 reads a script without a byte-order mark as the ANSI
+  code page.** The scripts are plain ASCII, and a test holds them to it.
+- **`ConvertTo-Json` flattens anything past depth 2 by default**, and
+  `OpenRGB.json` is deeper, so both installers share one Python module for that
+  edit instead of a PowerShell copy.
+- **Windows hidapi lists one entry per HID collection and may not know the
+  interface number.** The Commander Core is found by its usage, `0xFF42/0x0001`
+  -- read off this rig's own descriptors -- with interface 0 only as the
+  fallback for a usage nobody could read.
+
+### Found on the way, fixed as classes
+
+- 🚨 **A second daemon used to unlink a LIVE socket** and take the path over,
+  leaving the first deaf and the two fighting over the Commander Core, which
+  hidraw does nothing to protect. Binding now probes first and refuses -- before
+  a single sink is built, because a refused daemon's exit path would otherwise
+  black the case underneath the first one.
+- **The Linux shutdown unit read the repo's example config**, whatever the daemon
+  used. Root cannot search the user's config directory, so both installers now
+  resolve the daemon's file and hand it over, and a test fails the build if a
+  unit gains a placeholder the installer does not fill.
+- **`openrgb.restart_command = "systemctl ..."` was accepted, and would have run
+  letter by letter** -- `tuple()` of a string. A string is refused now, and the
+  setting takes a per-platform table.
+- **Broken TOML escaped the CLI as a traceback**, not a `ConfigError`.
+- **Linux-only advice was printed on every platform**: three `systemctl` lines,
+  now all from `hints.py`, with an AST guard over `src/` and the integration
+  checks so the next one cannot be added anywhere else.
+- **OpenRGB grabbing the Commander Core was silent.** The installers disable its
+  detector by name; the sink and `devices` now also say so whenever OpenRGB lists
+  a Commander Core while our own driver is on, in case another version names the
+  detector differently.
+- **OpenRGB never having run meant the detector edit was skipped**, which on
+  Windows would have left the conflict waiting for OpenRGB's first run. The shared
+  module creates the file with the two entries already off.
+
+### Verified live on Linux
+
+On the real hardware, with the systemd unit stopped: the daemon started by hand
+on UDP with every sink connected; a second daemon refused with exit 1 while the
+first kept listening; `devices` printing `RGB_PUBLISH_SOCKET=udp://127.0.0.1:45731`
+and staying off the held devices; `check_policy.py` **10/10** through
+matterlights' own publisher over UDP, staleness, recovery and the palette
+gradient included; `off --stop-daemon` stopping it -- the daemon's own exit code
+0, the port freed, and `off`'s black written only after the daemon had let go.
+Then the unit went back on the unix socket and `install.sh` was re-run: the
+shutdown unit loaded with the resolved config, and the detector step reported
+"already disabled" without writing a backup. matterlights' sync was restarted on
+the new publisher and delivers to the socket as before.
+
+Tests: 447 here, green on Python 3.14 and 3.12; matterlights 272, seven of them
+Windows-only and skipped on Linux. Every new behaviour was mutated to prove its
+test can fail: **41 of 41 mutants killed** across both repositories.
+
+### Still open -- it needs the Windows half
+
+The README's list, in order. The two that matter most: whether iCUE's service
+fights for the AIO even with iCUE's window closed (disable it either way), and a
+real restart for the event-1074 task, which is the only layer that blacks the
+case at a Windows shutdown.
+
 ## Deliberately not done
 
 - **Custom colours and patterns** drive the bulbs only; the RGB goes black in

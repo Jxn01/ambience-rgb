@@ -12,10 +12,11 @@ saw it instantly.
 So this drives a deliberate, memorable sequence on each device we drive with our
 own code -- the Commander Core, then the Katana soundbar -- and asks what you
 saw. Run it whenever a transport, the packet framing, or the report size
-changes, and before believing any claim that the lights work.
+changes, and before believing any claim that the lights work. On Windows, run it
+with the venv's python from the repository, like every other command there.
 
-Stop the daemon first (``systemctl --user stop ambience-rgb``). Exactly one
-process may drive each of these devices, so this refuses to run while it is up.
+Stop the daemon first; this says how, on either platform. Exactly one process
+may drive each of these devices, so it refuses to run while the daemon is up.
 """
 
 from __future__ import annotations
@@ -27,10 +28,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from ambience_rgb.__main__ import daemon_is_listening  # noqa: E402
+from ambience_rgb import hints  # noqa: E402
 from ambience_rgb.commander_core import CommanderCore  # noqa: E402
 from ambience_rgb.config import load_config  # noqa: E402
 from ambience_rgb.katana import Katana  # noqa: E402
+from ambience_rgb.transport import is_listening  # noqa: E402
 
 HOLD_SECONDS = 6.0
 SEQUENCE = [
@@ -53,6 +55,22 @@ def _announce(what: str) -> None:
     print(what)
     for name, _colour in SEQUENCE:
         print(f"    {name} for {HOLD_SECONDS:.0f}s")
+
+
+def _report_size_advice() -> str:
+    """How to ask the device its report size -- the first suspect -- on this OS."""
+
+    if sys.platform == "win32":
+        return (
+            "look at its HID report descriptor, e.g. with USB Device Tree Viewer:\n"
+            "    Report Size 8 bits x Report Count 0x40 = 64 bytes\n"
+            "(Windows adds the report-ID byte: the output report length it states is 65)"
+        )
+    return (
+        "ask the device:\n"
+        "    od -An -tx1 /sys/class/hidraw/hidraw20/device/report_descriptor\n"
+        "    75 08 96 40 00  ->  Report Size 8 bits x Report Count 0x0040 = 64"
+    )
 
 
 def check_commander(config) -> bool | None:
@@ -94,10 +112,11 @@ def check_commander(config) -> bool | None:
     print(
         "Not confirmed.\n"
         "First thing to check is the HID report size -- it is the failure that\n"
-        "looks exactly like success from every software vantage point:\n"
-        "    od -An -tx1 /sys/class/hidraw/hidraw20/device/report_descriptor\n"
-        "    75 08 96 40 00  ->  Report Size 8 bits x Report Count 0x0040 = 64\n"
+        "looks exactly like success from every software vantage point. To see\n"
+        f"what the device expects, {_report_size_advice()}\n"
         "and compare with REPORT_LENGTH in src/ambience_rgb/commander_protocol.py.\n"
+        "Then make sure nothing else drives it: OpenRGB's Commander Core detector,\n"
+        "CoolerControl's liquidctl on Linux, iCUE's Corsair Service on Windows.\n"
     )
     return False
 
@@ -151,10 +170,12 @@ def check_katana(config) -> bool | None:
 
 def main() -> int:
     config = load_config()
-    if daemon_is_listening(config.socket_path):
+    if is_listening(config.endpoint):
         print(
             "ambience-rgb is running, and it drives these devices. Stop it first:\n"
-            "    systemctl --user stop ambience-rgb"
+            f"    {hints.stop_daemon()}\n"
+            "and start it again afterwards:\n"
+            f"    {hints.start_daemon()}"
         )
         return 2
 

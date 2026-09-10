@@ -5,7 +5,7 @@ DefaultDependencies=no
 After=basic.target
 Before=shutdown.target
 Conflicts=shutdown.target
-RequiresMountsFor=@INSTALL_DIR@
+RequiresMountsFor=@INSTALL_DIR@ @CONFIG_DIR@
 
 [Service]
 Type=oneshot
@@ -22,7 +22,10 @@ ExecStart=/bin/true
 # something has written black. This is the belt to that braces.
 ExecStop=@INSTALL_DIR@/.venv/bin/python -m ambience_rgb off
 TimeoutStopSec=20
-Environment=AMBIENCE_RGB_CONFIG=@INSTALL_DIR@/config.example.toml
+# The config the DAEMON reads, resolved by the installer. Root at shutdown has
+# neither the user's home nor their environment to search, so it is handed the
+# file. Re-run scripts/install.sh after creating or moving a config.
+Environment="AMBIENCE_RGB_CONFIG=@CONFIG_PATH@"
 
 [Install]
 WantedBy=multi-user.target

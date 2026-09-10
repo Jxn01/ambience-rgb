@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import unittest
 
-from ambience_rgb.commander_core import CommanderCore, CommanderCoreError
+from ambience_rgb.commander_core import CommanderCore, CommanderCoreError, find_device_path
 from ambience_rgb.commander_protocol import DATA_TYPE_LED_COUNT, PORT_SLOTS, REPORT_LENGTH
 
 
@@ -169,6 +169,55 @@ class TransportTest(unittest.TestCase):
             self.assertIn("OpenRGB", str(caught.exception), "name the usual culprit")
         finally:
             module.find_device_path = original
+
+
+class DiscoveryTest(unittest.TestCase):
+    """Which HID entry is the Commander Core's control interface, on each OS.
+
+    The device has two vendor interfaces. Interface 0 answers; interface 1 opens
+    cleanly and then times out on the first read. Linux (hidraw) lists one entry
+    per USB interface and always knows its number. Windows hidapi lists one entry
+    per HID top-level COLLECTION and does not always know the interface number.
+    Both report the usage from the report descriptor, and there the two differ:
+    ``0xFF42``/``0x0001`` is control -- read off this rig's own descriptors,
+    ``06 42 ff 09 01`` on hidraw20 and ``06 42 ff 09 02`` on hidraw21.
+    """
+
+    def _entry(self, interface: int, usage: int, path: bytes) -> dict:
+        return {"interface_number": interface, "usage_page": 0xFF42, "usage": usage, "path": path}
+
+    def test_linux_picks_interface_zero(self) -> None:
+        entries = [self._entry(1, 0x0002, b"/dev/hidraw21"), self._entry(0, 0x0001, b"/dev/hidraw20")]
+        self.assertEqual(find_device_path(entries), b"/dev/hidraw20")
+
+    def test_windows_picks_the_control_collection_without_interface_numbers(self) -> None:
+        entries = [
+            self._entry(-1, 0x0002, b"\\\\?\\hid#vid_1b1c&pid_0c32&mi_01#7&b"),
+            self._entry(-1, 0x0001, b"\\\\?\\hid#vid_1b1c&pid_0c32&mi_00#7&a"),
+        ]
+        self.assertEqual(find_device_path(entries), b"\\\\?\\hid#vid_1b1c&pid_0c32&mi_00#7&a")
+
+    def test_the_usage_outranks_the_interface_number(self) -> None:
+        # Ask the device: the descriptor says what an interface IS.
+        entries = [self._entry(0, 0x0002, b"wrong"), self._entry(1, 0x0001, b"right")]
+        self.assertEqual(find_device_path(entries), b"right")
+
+    def test_without_usages_it_falls_back_to_interface_zero(self) -> None:
+        # Some hidapi builds report usage 0 where they cannot parse it.
+        entries = [
+            {"interface_number": 1, "usage_page": 0, "usage": 0, "path": b"one"},
+            {"interface_number": 0, "usage_page": 0, "usage": 0, "path": b"zero"},
+        ]
+        self.assertEqual(find_device_path(entries), b"zero")
+
+    def test_the_dead_interface_alone_is_not_the_device(self) -> None:
+        self.assertIsNone(find_device_path([self._entry(1, 0x0002, b"x")]))
+        self.assertIsNone(find_device_path([]))
+
+    def test_interface_zero_naming_itself_as_something_else_is_not_the_device(self) -> None:
+        # The fallback to interface 0 is for a usage nobody could read -- not
+        # for an interface whose descriptor says it is not the control one.
+        self.assertIsNone(find_device_path([self._entry(0, 0x0002, b"x")]))
 
 
 class ColourSelectionTest(unittest.TestCase):
@@ -370,50 +419,8 @@ class ReadOnlyInspectionTest(unittest.TestCase):
         self.assertTrue([p for p in fake.written if p[2] == 0x06])
 
 
-class DaemonDetectionTest(unittest.TestCase):
-    """The socket FILE existing proves nothing; only connecting does."""
-
-    def test_an_unbound_path_reads_as_not_running(self) -> None:
-        import tempfile
-        from pathlib import Path
-
-        from ambience_rgb.__main__ import daemon_is_listening
-
-        with tempfile.TemporaryDirectory() as directory:
-            self.assertFalse(daemon_is_listening(Path(directory) / "absent.sock"))
-
-    def test_a_bound_socket_reads_as_running(self) -> None:
-        import socket
-        import tempfile
-        from pathlib import Path
-
-        from ambience_rgb.__main__ import daemon_is_listening
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "live.sock"
-            server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-            server.bind(str(path))
-            try:
-                self.assertTrue(daemon_is_listening(path))
-            finally:
-                server.close()
-
-    def test_a_stale_socket_file_reads_as_not_running(self) -> None:
-        """A crashed daemon leaves the file behind; that must not fool us."""
-
-        import socket
-        import tempfile
-        from pathlib import Path
-
-        from ambience_rgb.__main__ import daemon_is_listening
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "stale.sock"
-            server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-            server.bind(str(path))
-            server.close()
-            self.assertTrue(path.exists(), "the file survives the process")
-            self.assertFalse(daemon_is_listening(path))
+# Whether a daemon holds the endpoint -- a stale socket file, a live one, UDP --
+# is tested in test_transport.py, alongside the transport that answers it.
 
 
 class EndpointRetryTest(unittest.TestCase):

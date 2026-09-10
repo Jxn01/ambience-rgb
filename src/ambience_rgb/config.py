@@ -9,18 +9,31 @@ mix of hardware should mean a different config file, not a patch.
 Read from, in order:
 
 1. ``$AMBIENCE_RGB_CONFIG``
-2. ``$XDG_CONFIG_HOME/ambience-rgb/config.toml`` (usually ``~/.config/...``)
+2. the user's config directory -- ``$XDG_CONFIG_HOME/ambience-rgb/config.toml``
+   (usually ``~/.config/...``) on Linux, ``%APPDATA%\\ambience-rgb\\config.toml``
+   on Windows
 3. ``config.example.toml`` next to the repo, as a last-resort default
 
 so a checkout runs without setup while a real install can override everything.
+
+One file serves both operating systems. Where they genuinely differ -- how
+matterlights reaches the daemon, how to restart the OpenRGB server -- the
+config says so per platform, and ``platform`` is a parameter throughout so the
+Windows branches run in the test suite on Linux, and the Linux ones on Windows.
 """
 
 from __future__ import annotations
 
 import os
+import re
+import sys
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from ambience_rgb import paths
+from ambience_rgb.transport import DEFAULT_UDP_PORT, LOOPBACK, Endpoint, UdpEndpoint, UnixEndpoint
 
 GROUP_NEAR = "near"
 GROUP_FAR = "far"
@@ -30,6 +43,25 @@ VALID_GROUPS = frozenset({GROUP_NEAR, GROUP_FAR, GROUP_EXCLUDED})
 BUS_USB = "usb"
 BUS_SMBUS = "smbus"
 VALID_BUSES = frozenset({BUS_USB, BUS_SMBUS})
+
+TRANSPORT_AUTO = "auto"
+TRANSPORT_UNIX = "unix"
+TRANSPORT_UDP = "udp"
+VALID_TRANSPORTS = (TRANSPORT_AUTO, TRANSPORT_UNIX, TRANSPORT_UDP)
+
+# What a person writes in a config file for each platform -- "windows", not
+# sys.platform's "win32".
+_PLATFORM_NAMES = {"linux": "linux", "win32": "windows"}
+VALID_PLATFORM_NAMES = frozenset(_PLATFORM_NAMES.values())
+
+EXAMPLE_CONFIG = Path(__file__).resolve().parents[2] / "config.example.toml"
+
+
+def platform_name(platform: str | None = None) -> str:
+    """``linux`` or ``windows`` -- the name a config file uses for ``platform``."""
+
+    platform = platform or sys.platform
+    return _PLATFORM_NAMES.get(platform, platform)
 
 
 class ConfigError(ValueError):
@@ -110,7 +142,9 @@ class KatanaConfig:
 
 @dataclass(frozen=True, slots=True)
 class Config:
-    socket_path: Path
+    endpoint: Endpoint
+    """Where matterlights' frames arrive. Its ``str()`` is the exact value for
+    matterlights' ``RGB_PUBLISH_SOCKET``."""
     openrgb_host: str = "127.0.0.1"
     openrgb_port: int = 6742
     usb_interval_seconds: float = 0.2
@@ -124,8 +158,8 @@ class Config:
     any device. The liveness probe cannot see that, because the server IS live.
     Only restarting it recovered.
 
-    Empty disables it, which is the default: restarting another unit is a real
-    side effect and has to be opted into.
+    Already resolved for this platform. Empty disables it, which is the default:
+    restarting another program is a real side effect and has to be opted into.
     """
     saturation: float = 1.0
     """Push colours away from grey before writing them. 1.0 disables it.
@@ -266,6 +300,9 @@ def _validate_bus(value: str, where: str) -> str:
     return bus
 
 
+_UNEXPANDED = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)")
+
+
 def _expand_runtime_vars(raw: str) -> str:
     """Expand environment variables, with a working default for XDG_RUNTIME_DIR.
 
@@ -274,29 +311,122 @@ def _expand_runtime_vars(raw: str) -> str:
     unset variable in place verbatim, producing a path with a literal ``$`` in
     it. That is not an error anyone can read. Substituting the value systemd
     would have used keeps the same config file valid in both contexts.
+
+    ⚠️ That substitution needs ``os.getuid``, which does not exist on Windows.
+    It used to be called unconditionally, so the shipped config -- whose path is
+    exactly ``$XDG_RUNTIME_DIR/...`` -- crashed there at load. Windows no longer
+    reaches this at all (it uses UDP), and the lookup is guarded regardless.
+    Any variable still unexpanded afterwards is an error that names it.
     """
 
-    if "$XDG_RUNTIME_DIR" in raw and not os.getenv("XDG_RUNTIME_DIR"):
-        raw = raw.replace("$XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-    return os.path.expandvars(raw)
+    if not os.getenv("XDG_RUNTIME_DIR"):
+        getuid = getattr(os, "getuid", None)
+        if getuid is not None:
+            runtime_dir = f"/run/user/{getuid()}"
+            raw = raw.replace("${XDG_RUNTIME_DIR}", runtime_dir).replace("$XDG_RUNTIME_DIR", runtime_dir)
+    expanded = os.path.expandvars(raw)
+    leftover = _UNEXPANDED.search(expanded)
+    if leftover:
+        raise ConfigError(
+            f"socket.path uses ${leftover.group(1)}, which is not set here -- "
+            "set it, or write the path out in full"
+        )
+    return expanded
 
 
-def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
+def _udp_port(value) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 65535:
+        raise ConfigError(f"socket.udp_port must be a whole number from 1 to 65535, got {value!r}")
+    return value
+
+
+def _parse_endpoint(section, *, base_dir: Path | None, platform: str) -> Endpoint:
+    """The transport for this platform, reading only the keys that transport uses.
+
+    That last part is load-bearing, not tidiness: the unix path is never even
+    looked at when the transport is UDP, which is what keeps the shipped
+    config's ``$XDG_RUNTIME_DIR`` away from Windows.
+    """
+
+    if not isinstance(section, dict):
+        raise ConfigError("[socket] must be a table")
+    transport = str(section.get("transport", TRANSPORT_AUTO)).strip().lower()
+    if transport not in VALID_TRANSPORTS:
+        raise ConfigError(
+            f"socket.transport must be one of {', '.join(VALID_TRANSPORTS)}, "
+            f"got {section.get('transport')!r}"
+        )
+    if transport == TRANSPORT_AUTO:
+        transport = TRANSPORT_UDP if platform == "win32" else TRANSPORT_UNIX
+
+    if transport == TRANSPORT_UDP:
+        return UdpEndpoint(LOOPBACK, _udp_port(section.get("udp_port", DEFAULT_UDP_PORT)))
+
+    if platform == "win32":
+        raise ConfigError(
+            'socket.transport = "unix" is not available on Windows, which has no unix '
+            'datagram sockets; use "udp", or "auto"'
+        )
+    raw_path = str(section.get("path", "")).strip()
+    if not raw_path:
+        raise ConfigError(
+            "socket.path is required for the unix socket -- it must match RGB_PUBLISH_SOCKET"
+        )
+    path = paths.expand_user(Path(_expand_runtime_vars(raw_path)))
+    if not path.is_absolute() and base_dir is not None:
+        path = (base_dir / path).resolve()
+    return UnixEndpoint(path)
+
+
+def _command_list(value, where: str) -> tuple[str, ...]:
+    # 🚨 A bare string is refused rather than tuple()'d: that would be a tuple
+    # of its characters, and the restart would run a program called "s".
+    if not isinstance(value, (list, tuple)):
+        raise ConfigError(
+            f'{where} must be a list of arguments, e.g. ["program", "--flag", "value"], got {value!r}'
+        )
+    if not all(isinstance(item, str) for item in value):
+        raise ConfigError(f"{where}: every argument must be a string, got {value!r}")
+    return tuple(value)
+
+
+def _restart_command(value, platform: str) -> tuple[str, ...]:
+    """A list for every platform, or a table of lists keyed ``linux``/``windows``.
+
+    Every entry is validated, not only this platform's, so a broken Windows
+    command is reported on Linux too -- before the machine that needs it boots.
+    """
+
+    if value is None:
+        return ()
+    if isinstance(value, dict):
+        unknown = sorted(str(name) for name in value if name not in VALID_PLATFORM_NAMES)
+        if unknown:
+            raise ConfigError(
+                f"openrgb.restart_command: unknown platform {', '.join(map(repr, unknown))}; "
+                f"use {' or '.join(sorted(VALID_PLATFORM_NAMES))}"
+            )
+        commands = {
+            name: _command_list(command, f"openrgb.restart_command.{name}")
+            for name, command in value.items()
+        }
+        return commands.get(platform_name(platform), ())
+    return _command_list(value, "openrgb.restart_command")
+
+
+def parse_config(
+    payload: dict, *, base_dir: Path | None = None, platform: str | None = None
+) -> Config:
     """Turn a parsed TOML mapping into a Config, or say exactly what is wrong.
 
     Pure, so every validation branch is testable without touching the disk.
     """
 
+    platform = platform or sys.platform
     if not isinstance(payload, dict):
         raise ConfigError("Configuration must be a table")
 
-    socket_section = payload.get("socket") or {}
-    raw_path = str(socket_section.get("path", "")).strip()
-    if not raw_path:
-        raise ConfigError("socket.path is required -- it must match RGB_PUBLISH_SOCKET")
-    socket_path = Path(os.path.expanduser(_expand_runtime_vars(raw_path)))
-    if not socket_path.is_absolute() and base_dir is not None:
-        socket_path = (base_dir / socket_path).resolve()
+    endpoint = _parse_endpoint(payload.get("socket") or {}, base_dir=base_dir, platform=platform)
 
     openrgb = payload.get("openrgb") or {}
     rates = payload.get("rates") or {}
@@ -354,12 +484,12 @@ def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
     )
 
     return Config(
-        socket_path=socket_path,
+        endpoint=endpoint,
         openrgb_host=str(openrgb.get("host", "127.0.0.1")),
         openrgb_port=int(openrgb.get("port", 6742)),
         usb_interval_seconds=interval("usb_hz", 5.0),
         smbus_interval_seconds=interval("smbus_hz", 1.0),
-        openrgb_restart_command=tuple(openrgb.get("restart_command", ()) or ()),
+        openrgb_restart_command=_restart_command(openrgb.get("restart_command"), platform),
         saturation=_positive(colour.get("saturation", 1.0), "colour.saturation"),
         gamma=_positive(colour.get("gamma", 1.0), "colour.gamma"),
         group_cohesion=_fraction(colour.get("group_cohesion", 0.0), "colour.group_cohesion"),
@@ -370,23 +500,49 @@ def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
     )
 
 
-def config_search_path() -> list[Path]:
-    paths = []
-    override = os.getenv("AMBIENCE_RGB_CONFIG")
+def config_search_path(
+    *, platform: str | None = None, environ: Mapping[str, str] | None = None
+) -> list[Path]:
+    """Every place a config is looked for, most specific first."""
+
+    environ = os.environ if environ is None else environ
+    found: list[Path] = []
+    override = environ.get("AMBIENCE_RGB_CONFIG")
     if override:
-        paths.append(Path(override).expanduser())
-    xdg = os.getenv("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    paths.append(Path(xdg) / "ambience-rgb" / "config.toml")
-    paths.append(Path(__file__).resolve().parents[2] / "config.example.toml")
-    return paths
+        found.append(paths.expand_user(Path(override)))
+    directory = paths.config_dir(platform=platform, environ=environ)
+    if directory is not None:
+        found.append(directory / "config.toml")
+    found.append(EXAMPLE_CONFIG)
+    return found
 
 
-def load_config(path: Path | None = None) -> Config:
-    candidates = [path] if path is not None else config_search_path()
+def resolved_config_path(
+    *, platform: str | None = None, environ: Mapping[str, str] | None = None
+) -> Path:
+    """The file :func:`load_config` would read for this user, right now.
+
+    The installers bake this into the shutdown unit and task. Those run as root
+    or SYSTEM, with another home and another environment, so they cannot search
+    for this user's config themselves -- they have to be handed the path the
+    daemon uses, or they black a different set of devices from the one it drives.
+    """
+
+    candidates = config_search_path(platform=platform, environ=environ)
     for candidate in candidates:
-        if candidate is not None and candidate.is_file():
-            with candidate.open("rb") as handle:
-                payload = tomllib.load(handle)
-            return parse_config(payload, base_dir=candidate.parent)
-    searched = ", ".join(str(c) for c in candidates if c is not None)
+        if candidate.is_file():
+            return candidate
+    searched = ", ".join(str(c) for c in candidates)
     raise ConfigError(f"No configuration file found. Looked in: {searched}")
+
+
+def load_config(path: Path | None = None, *, platform: str | None = None) -> Config:
+    candidate = path if path is not None else resolved_config_path(platform=platform)
+    if not candidate.is_file():
+        raise ConfigError(f"No configuration file at {candidate}")
+    try:
+        with candidate.open("rb") as handle:
+            payload = tomllib.load(handle)
+    except tomllib.TOMLDecodeError as error:
+        raise ConfigError(f"{candidate} is not valid TOML: {error}") from error
+    return parse_config(payload, base_dir=candidate.parent, platform=platform)

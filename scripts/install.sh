@@ -79,30 +79,12 @@ bold "Installed ambience-rgb into the venv"
 # registers the Commander Core even though it cannot size its zones; with its
 # detector on, nothing errors and the colours never apply.
 # --------------------------------------------------------------------------
-if [[ -f "$OPENRGB_CONFIG" ]]; then
-    backup="$OPENRGB_CONFIG.bak-$(date +%Y%m%d-%H%M%S)"
-    cp "$OPENRGB_CONFIG" "$backup"
-    "$SYSTEM_PYTHON" - "$OPENRGB_CONFIG" <<'PY'
-import json, sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-config = json.loads(path.read_text())
-detectors = config.setdefault("Detectors", {}).setdefault("detectors", {})
-changed = [
-    name
-    for name in ("Corsair Commander Core", "Corsair Commander Core XT")
-    if detectors.get(name) is not False
-]
-for name in changed:
-    detectors[name] = False
-path.write_text(json.dumps(config, indent=4))
-print(f"  OpenRGB detectors disabled: {changed or '(already disabled)'}")
-PY
-    echo "  backup: $backup"
-else
-    warn "  No OpenRGB config at $OPENRGB_CONFIG; run OpenRGB once, then re-run this."
-fi
+# The edit lives in ambience_rgb.openrgb_settings, shared with the Windows
+# installer. It backs the file up before changing it, leaves it byte-for-byte
+# alone when both detectors are already off, and creates it when OpenRGB has
+# never run -- so OpenRGB's first run starts with them off, whenever it happens.
+"$VENV/bin/python" -m ambience_rgb.openrgb_settings "$OPENRGB_CONFIG" \
+    || warn "  Could not update $OPENRGB_CONFIG; disable OpenRGB's Corsair Commander Core detectors by hand."
 
 # CoolerControl is the second contender, and it arrives silently. Its liquidctl
 # integration defaults to ON but does nothing while liquidctl is absent -- so it
@@ -161,10 +143,22 @@ fi
 # --------------------------------------------------------------------------
 # 4. Units
 # --------------------------------------------------------------------------
+# The shutdown unit runs as root, which has neither this user's home nor their
+# environment to search -- so it is handed the config file the daemon reads.
+# Re-run this script after creating or moving a config.
+CONFIG_PATH=$("$VENV/bin/python" -c "from ambience_rgb.config import resolved_config_path; print(resolved_config_path())")
+CONFIG_DIR=$(dirname "$CONFIG_PATH")
+echo "  config: $CONFIG_PATH"
+
 install_unit() {   # $1 = unit, $2 = dest dir, $3 = "sudo" or empty
     local src="$REPO_ROOT/systemd/$1" dst="$2/$1"
     ${3:+sudo} mkdir -p "$2"
-    sed "s|@INSTALL_DIR@|$REPO_ROOT|g" "$src" | ${3:+sudo} tee "$dst" >/dev/null
+    # Every @PLACEHOLDER@ a unit uses must be filled here; test_unit_files.py
+    # fails the build when one is not.
+    sed -e "s|@INSTALL_DIR@|$REPO_ROOT|g" \
+        -e "s|@CONFIG_PATH@|$CONFIG_PATH|g" \
+        -e "s|@CONFIG_DIR@|$CONFIG_DIR|g" \
+        "$src" | ${3:+sudo} tee "$dst" >/dev/null
     echo "  installed $dst"
 }
 
@@ -187,7 +181,7 @@ cat <<EOF
 
       RGB_EXTENSION_ENABLED=true
       RGB_PUBLISH_SOCKET=$(
-          "$VENV/bin/python" -c "from ambience_rgb.config import load_config; print(load_config().socket_path)"
+          "$VENV/bin/python" -c "from ambience_rgb.config import load_config; print(load_config().endpoint)"
       )
 
   then: systemctl --user restart matterlights-sync

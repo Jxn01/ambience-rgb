@@ -25,9 +25,10 @@ If you own neither, nothing is lost: disable them in the config and the rest
 works unchanged.
 
 You will need **matterlights** running, since this program deliberately does not
-capture the screen itself. And today the transport between them is a unix
-datagram socket, so this half is **Linux-only** until the Windows port lands --
-the reasoning, and what that port actually requires, is in
+capture the screen itself. It runs on **Linux and Windows**: one codebase, one
+config file, an installer for each. The Windows half is built and tested from
+Linux but has **not yet run on Windows** -- what still needs that is listed under
+*Windows: what is verified, and what is not*, and the port's reasoning is in
 [docs/specs/2026-09-10-devices-and-windows-research.md](docs/specs/2026-09-10-devices-and-windows-research.md).
 
 The design reasoning is in
@@ -41,19 +42,26 @@ one in particular is worth reading before writing any USB HID driver.
 ## How it fits together
 
 ```
-matterlights-sync
+matterlights sync loop
   capture -> ambience -> Matter bulbs
-                      -> unix datagram socket ---.
-                                                  |
-ambience-rgb (this)                                  |
-  subscribe  <------------------------------------'
+                      -> one datagram per tick ----------------------.
+                         Linux:   unix socket, $XDG_RUNTIME_DIR       |
+                         Windows: UDP, 127.0.0.1:45731                |
+ambience-rgb (this)                                                    |
+  subscribe  <--------------------------------------------------------'
   near/far -> OpenRGBSink       -> RAM x2, GPU, mouse, monitor, motherboard
-           -> CommanderCoreSink -> AIO pump + fans   (our own hidraw driver)
+           -> CommanderCoreSink -> AIO pump + fans   (our own HID driver)
            -> KatanaSink        -> soundbar light bar (our own serial driver)
 ```
 
 MatterLights captures the screen; this does not. A second capture would double
-the PipeWire load and let the lamps and the case disagree during a scene change.
+the capture load and let the lamps and the case disagree during a scene change.
+
+Windows has no unix *datagram* sockets -- its `AF_UNIX` is `SOCK_STREAM` only,
+and a stream socket would bring the one thing this link must never have, a
+connection the publisher can block on. So there the link is UDP on the
+loopback. Both transports are fire-and-forget and carry the same payload, and on
+both a second daemon refuses to start rather than taking the link over.
 
 ## What it drives
 
@@ -79,11 +87,13 @@ motherboard is split *per zone* because both are true of it at once.
 
 ## Install
 
+### Linux
+
 **Prerequisites:** [OpenRGB](https://openrgb.org/) (for everything but the
-Commander Core) and the *distribution* package for the `hidapi` Python binding --
-`python-hidapi` on Arch, `python3-hid` on Debian/Ubuntu. Do **not** `pip install
-hid`: the PyPI package under that name is a different library and shadows the
-system one inside the venv.
+Commander Core and the soundbar) and the *distribution* package for the `hidapi`
+Python binding -- `python-hidapi` on Arch, `python3-hid` on Debian/Ubuntu. Do
+**not** `pip install hid`: the PyPI package under that name is a different
+library and shadows the system one inside the venv.
 
 The Katana driver also needs `pyserial` and `cryptography`. The distribution
 packages (`python-pyserial`, `python-cryptography`) are used when present and
@@ -97,11 +107,14 @@ scripts/install.sh
 It refuses a conda interpreter, checks `hid` is importable, marks the
 distribution Python bindings it uses as explicitly installed (so an orphan sweep
 cannot take them), builds the venv with `--system-site-packages`, disables
-OpenRGB's Commander Core detector (backing the config up first), installs a udev
-rule that gives you the Katana's serial port and keeps ModemManager off it, then
-installs three systemd units and enables them.
+OpenRGB's Commander Core detectors (backing its settings up first, or creating
+them if OpenRGB has never run), installs a udev rule that gives you the Katana's
+serial port and keeps ModemManager off it, then installs three systemd units and
+enables them. The shutdown unit is handed the config file the daemon reads, so
+**re-run it after creating or moving a config**.
 
-Then tell MatterLights to publish, in its `.env`:
+Then tell MatterLights to publish, in its `.env` -- `ambience-rgb devices` prints
+the exact line:
 
 ```ini
 RGB_EXTENSION_ENABLED=true
@@ -110,36 +123,107 @@ RGB_PUBLISH_SOCKET=/run/user/1000/ambience-rgb.sock
 
 and `systemctl --user restart matterlights-sync`.
 
+### Windows
+
+**Prerequisites:** Python 3.11 or newer from python.org, with its `py` launcher;
+[OpenRGB](https://openrgb.org/) for the devices it drives; and an **elevated**
+PowerShell -- Windows PowerShell 5.1 or PowerShell 7 both work.
+
+⚠️ **The `hidapi` rule is the exact opposite of Linux's.** Windows has no
+distribution package, so the binding comes from pip, as the package `hidapi`
+(cython-hidapi, which still imports as `hid`), and the venv is built *without*
+system site-packages. `pyproject.toml` declares `hidapi` for Windows only, and
+the installer checks that the `hid` it got really is cython-hidapi.
+
+```powershell
+scripts\windows\install.ps1                        # reports other RGB software
+scripts\windows\install.ps1 -DisableCompetitors    # ...and stops and disables its services
+```
+
+| Parameter | Meaning |
+|---|---|
+| `-OpenRgb <path>` | `OpenRGB.exe`, when it is not on `PATH`, in `Program Files`, in `%LOCALAPPDATA%\Programs` or in winget's package folder. The installer does not guess further. |
+| `-NoOpenRgbTask` | Do not register the OpenRGB server task, for running OpenRGB your own way. It must then serve the SDK on the config's host and port. |
+| `-DisableCompetitors` | Stop and disable the services of other RGB software it finds -- iCUE's `CorsairService` and `CorsairDeviceControlService`, `SignalRgb.Service` -- printing how to undo each. Without it they are only reported. |
+
+It builds `.venv` with the `py` launcher and installs the package into it; turns
+OpenRGB's Commander Core detectors off in `%APPDATA%\OpenRGB\OpenRGB.json` with
+the very code `install.sh` runs -- creating the file if OpenRGB has never run,
+so installing OpenRGB *later* cannot bring the conflict back; reports (or
+disables) other RGB software; registers three scheduled tasks and starts two;
+and prints the `.env` line matterlights needs:
+
+```ini
+RGB_EXTENSION_ENABLED=true
+RGB_PUBLISH_SOCKET=udp://127.0.0.1:45731
+```
+
+Re-run it after pulling, and after creating or moving a config: the shutdown
+task is handed the config file's path. `scripts\windows\uninstall.ps1` stops the
+daemon, blacks everything and removes the tasks.
+
+🚨 **Other RGB software must not be running.** On the author's Windows half,
+iCUE's `CorsairService` and `SignalRgb.Service` were both still set to start
+automatically long after their user interfaces had been taken out of autostart.
+Either can drive the Commander Core beside this daemon -- the same silent fight
+as CoolerControl's liquidctl on Linux. The installer reports them, and
+`-DisableCompetitors` turns them off.
+
 ## Commands
+
+On Windows run these as `.venv\Scripts\python -m ambience_rgb …` in the
+repository.
 
 | Command | What it does |
 |---|---|
-| `ambience-rgb run` | The daemon. What the systemd unit runs. |
+| `ambience-rgb run` | The daemon. What the systemd unit and the logon task run. |
 | `ambience-rgb off` | Write black to everything once and exit. What the shutdown unit runs. |
-| `ambience-rgb devices` | Print what would be driven, with groups, buses and LED counts. **Run this first when something looks wrong.** Read-only: it never changes a colour, and skips the Commander Core and the Katana while the daemon holds them. |
-| `ambience-rgb -v …` | Debug logging, including every colour decision. |
+| `ambience-rgb off --stop-daemon` | First ask a running daemon to stop -- it blacks and releases every device -- wait until it has, then black everything once more. What the Windows shutdown task runs, and **the way to stop the daemon on Windows**. |
+| `ambience-rgb devices` | Print what would be driven, with groups, buses and LED counts, and the exact `RGB_PUBLISH_SOCKET` value for matterlights. **Run this first when something looks wrong.** Read-only: it never changes a colour, and skips the Commander Core and the Katana while the daemon holds them. It also warns when OpenRGB has detected the Commander Core too. |
 
-## Units
+| Option | Meaning |
+|---|---|
+| `--config PATH` | Use this config file instead of searching for one. |
+| `--log-file PATH` | Log to this file instead of stderr -- rotated at 1 MB with three old copies, every line timestamped. It is also the default when there is no stderr at all, as under `pythonw`: then the file is `ambience-rgb.log` in the state directory, `%LOCALAPPDATA%\ambience-rgb` on Windows and `$XDG_STATE_HOME/ambience-rgb` (`~/.local/state/ambience-rgb`) on Linux. |
+| `--stop-daemon` | With `off` only; see above. |
+| `-v`, `--verbose` | Debug logging, including every colour decision. |
 
-| Unit | Scope | Purpose |
-|---|---|---|
-| `ambience-rgb-openrgb.service` | user | The OpenRGB SDK server, bound to `127.0.0.1` |
-| `ambience-rgb.service` | user | The daemon |
-| `ambience-rgb-lights-off.service` | **system** | `ExecStop` writes black at shutdown |
+## Units and tasks
+
+| Linux unit | Windows task | Runs as | Purpose |
+|---|---|---|---|
+| `ambience-rgb-openrgb.service` | `ambience-rgb-openrgb` | you (the task elevated, for SMBus) | The OpenRGB SDK server, bound to `127.0.0.1` |
+| `ambience-rgb.service` | `ambience-rgb` | you | The daemon; the task runs it under `pythonw`, so no console window appears |
+| `ambience-rgb-lights-off.service` | `ambience-rgb-lights-off` | root / **SYSTEM** | Black at shutdown: the unit in its `ExecStop`, the task on System event 1074 |
+
+The names match on purpose, and a test holds the units, the installers and the
+commands this program prints to the same three.
 
 The daemon only `Wants=` the OpenRGB server. A dead server should cost the
 motherboard and RAM, not the AIO, which needs no server at all.
 
+On Windows both logon tasks run without a time limit -- Task Scheduler's default
+stops a task after 72 hours -- and are retried up to three times if they fail to
+*start*. That is all Task Scheduler's restart-on-failure covers: an exit with an
+error code is not a failure to it, so there is no equivalent of the unit's
+`Restart=on-failure`. The daemon keeps every sink's failures to itself and does
+not fall over on bad hardware; should it ever stop, `Start-ScheduledTask
+-TaskName ambience-rgb` or a fresh logon starts it again.
+
 ## Configuration
 
-`~/.config/ambience-rgb/config.toml`, falling back to `config.example.toml` in the
-repo. `$AMBIENCE_RGB_CONFIG` overrides both.
+Searched in order: `$AMBIENCE_RGB_CONFIG`; then the user's config directory,
+`~/.config/ambience-rgb/config.toml` (`$XDG_CONFIG_HOME`) on Linux and
+`%APPDATA%\ambience-rgb\config.toml` on Windows; then `config.example.toml` in
+the repo. One file serves both platforms, and says so where they differ.
 
 | Key | Meaning |
 |---|---|
-| `socket.path` | Must equal MatterLights' `RGB_PUBLISH_SOCKET`. `$XDG_RUNTIME_DIR` is expanded, with a working fallback when root runs it at shutdown. |
+| `socket.transport` | `auto` (the default) is the unix socket on Linux and UDP on Windows. `unix` forces the socket, and is refused on Windows, which has no unix datagram sockets; `udp` forces UDP. |
+| `socket.path` | The unix socket, read only for that transport. Must equal MatterLights' `RGB_PUBLISH_SOCKET`. Environment variables are expanded -- `$XDG_RUNTIME_DIR` with a working fallback when root runs it at shutdown -- and any other unset variable is an error rather than a directory named `$`. A relative path resolves from the config file's directory. |
+| `socket.udp_port` | The UDP port, always on `127.0.0.1`; read only for that transport. Default `45731`, below Windows' dynamic range (49152 and up), where Hyper-V and WSL reserve ports at boot. matterlights then publishes to `udp://127.0.0.1:<port>`. |
 | `openrgb.host` / `openrgb.port` | SDK server. Keep the host on the loopback. |
-| `openrgb.restart_command` | Run this when the server wedges beyond reconnecting. Empty = log only. |
+| `openrgb.restart_command` | Run this when the server wedges beyond reconnecting. A list applies on every platform. A table picks by platform -- `[openrgb.restart_command]` with `linux = [...]` and `windows = [...]` -- and a platform without an entry only logs. Empty = log only. A plain string is refused: it would run as a tuple of its characters. |
 | `rates.usb_hz` / `rates.smbus_hz` | Update rate **per bus**. |
 | `commander.enabled` | Drive the AIO at all. |
 | `commander.pump_group` / `commander.fan_group` | `near` or `far`. Not `excluded`: the device is written whole, so use `enabled = false`. |
@@ -225,8 +309,13 @@ the daemon writes on every tick rather than only on change.
 | **Lamp** master switch off | **Ignored — RGB keeps syncing.** It has its own switch. |
 | Custom colour/pattern mode | Black — this syncs ambient mode only |
 | MatterLights stops | Black after 10 s, rather than freezing on the last colour |
-| SIGTERM / logout | Black, then exit |
-| Shutdown | `ExecStop` writes black |
+| `off --stop-daemon` (the stop command) | Black, every device released, then exit 0 |
+| SIGTERM / SIGINT / Ctrl+Break | Black, then exit |
+| Logout — Linux | The unit stops with the session: SIGTERM, black, exit |
+| Logoff — Windows | The daemon's hidden session-end window asks it to stop, and holds `WM_ENDSESSION` -- up to 4 s -- until the black is written, since Windows may end the process the moment that message returns |
+| Shutdown / restart — Linux | The system unit's `ExecStop` writes black |
+| Shutdown / restart — Windows | The SYSTEM task on System event 1074 stops the daemon, waits for it to let go of everything, and blacks it all again. The session-end window does **not** fire at shutdown -- matterlights measured the same window across eight session ends -- so this task is the layer that does it |
+| `Stop-ScheduledTask -TaskName ambience-rgb` | ⚠️ Probably **not** graceful: the task's process is the venv's launcher stub, and ending it terminates the interpreter with it, black unwritten. Use `off --stop-daemon`. Unverified -- see below |
 
 The soundbar is the exception to "no off state": it holds whatever it was last
 sent, and has its own power supply. Black is still written on every exit path,
@@ -460,6 +549,36 @@ blackouts before suspecting anything here.
 **The RGB is dark but the lamps are on.** Check the dashboard's *RGB* switch —
 it is independent of the lamps' switch by design.
 
+### On Windows
+
+**Where is the log?** `%LOCALAPPDATA%\ambience-rgb\ambience-rgb.log`, and
+`lights-off.log` beside it for the shutdown task. Nothing reaches a console:
+the task runs `pythonw`, which has none.
+
+**The AIO flickers, falls back to its firmware pattern, or ignores colours.**
+Something else is driving it. `Get-Service CorsairService,
+CorsairDeviceControlService, SignalRgb.Service` -- any of them running is
+enough -- and `scripts\windows\install.ps1 -DisableCompetitors` stops and
+disables them. OpenRGB's own Commander Core detector is the other contender;
+`devices` warns when OpenRGB lists the device.
+
+**The soundbar does not follow.** Windows opens a COM port exclusively, so any
+other program holding `COM3` -- Creative's app, a serial terminal -- locks the
+daemon out, and the log says `Access is denied`. For the same reason, stop the
+daemon (`off --stop-daemon`) before running `devices` or `check_hardware.py`.
+
+**The daemon is not running.** `Get-ScheduledTask -TaskName ambience-rgb` shows
+its state and last result, and `Start-ScheduledTask -TaskName ambience-rgb`
+starts it. A crash is not restarted -- Task Scheduler's restart-on-failure only
+covers a failure to start -- so a stopped daemon stays stopped until then or the
+next logon.
+
+**matterlights publishes but nothing arrives.** Compare `RGB_PUBLISH_SOCKET` in
+its `.env` with what `devices` prints. A port another program holds, or one
+Windows has reserved (`netsh int ipv4 show excludedportrange protocol=udp`),
+makes the daemon refuse to start and say so in its log; move it with
+`socket.udp_port`, on both sides.
+
 ## Other hardware, and Windows
 
 Researched 2026-09-10, written up in
@@ -468,8 +587,59 @@ Researched 2026-09-10, written up in
 | | |
 |---|---|
 | **Ducky One 3 TKL RGB** | **Ruled out.** Its RGB is onboard-only — no host lighting software exists, so there is nothing to capture and no protocol to speak. The vendor HID interface is for firmware. All the open-source prior art targets the One **2**, a different vendor ID. |
-| **Sound Blaster Katana V2X** | **Driven since 2026-09-10** — see *The Katana driver*. Live on Linux; on Windows it is `COM3` through the inbox `usbser` driver, so the same code will open it once the port lands — the most portable device in the project, needing no OpenRGB server and no HID. ⚠️ If you own one, hold off on firmware `1.30.260813.1100`: it post-dates the published protocol and nobody has checked it. |
-| **Windows** | **Planned.** The only real blocker is the IPC: Windows `AF_UNIX` is `SOCK_STREAM` only, so the datagram socket needs a UDP-on-loopback sibling. Everything else follows the per-platform package pattern matterlights already proves. |
+| **Sound Blaster Katana V2X** | **Driven since 2026-09-10** — see *The Katana driver*. Live on Linux; on Windows it is `COM3` through the inbox `usbser` driver, and the same code opens it there — the most portable device in the project, needing no OpenRGB server and no HID. ⚠️ If you own one, hold off on firmware `1.30.260813.1100`: it post-dates the published protocol and nobody has checked it. |
+| **Windows** | **Built 2026-09-10; not yet run there.** See the next section. |
+
+## Windows: what is verified, and what is not
+
+The author's machine dual-boots, so the Windows half was written and tested from
+Linux. That covers more than it sounds like -- and less.
+
+**Verified from Linux, on every test run:**
+
+- The UDP transport, both directions, against real sockets: a second daemon
+  refused with the first undisturbed, the loopback-only bind, the stop command,
+  and the endpoint freed only after every device is released. The same tests
+  run on Windows unchanged.
+- The whole suite under Python 3.12 -- the Windows half's interpreter -- as well
+  as 3.14.
+- The session-end window's decisions (query, end, cancelled end, close, console
+  events) under a thin Win32 fake. On Windows the same tests run against the
+  real `user32`, and one creates a real hidden window.
+- Every scheduled task's XML, **rendered by a real PowerShell** from
+  `scripts/windows/tasks.ps1` and parsed back: principals, triggers, the
+  event-1074 subscription, `PT0S`, escaping. Every script parses, and is plain
+  ASCII so that Windows PowerShell 5.1 reads it as written.
+- matterlights' UDP publisher, including Windows' next-send `WSAECONNRESET`.
+
+**Verified live on Linux, 2026-09-10, on the real hardware:** the daemon on UDP
+with every sink connected; a second daemon refused with exit 1 and the first
+still listening; `devices` printing `RGB_PUBLISH_SOCKET=udp://127.0.0.1:45731`
+and keeping off the held devices; `check_policy.py` **10/10** through
+matterlights' own publisher over UDP; `off --stop-daemon` stopping it with exit
+0, the endpoint freed, and its own black written after the daemon let go.
+
+**Needs Windows -- the first boot there should check, in this order:**
+
+1. `scripts\windows\install.ps1` runs clean from an elevated PowerShell, and all
+   three tasks appear in Task Scheduler.
+2. OpenRGB on Windows: whether `--server --server-host 127.0.0.1` starts it
+   without a window, whether the elevated task reaches SMBus (RAM, GPU), whether
+   its controller names still match the config's substrings, and whether
+   `%APPDATA%\OpenRGB\OpenRGB.json` is really where it keeps its settings.
+3. Nothing else drives the Commander Core: iCUE's `CorsairService` and
+   `SignalRgb.Service` stopped and disabled (`-DisableCompetitors`).
+4. `devices` with the daemon stopped: the Commander Core found through Windows'
+   hidapi, the Katana on `COM3`.
+5. `tests\integration\check_hardware.py`: eyes on the AIO and the soundbar.
+6. matterlights, pulled and restarted with `RGB_PUBLISH_SOCKET=udp://127.0.0.1:45731`,
+   drives the case.
+7. A logoff blacks everything -- the session-end window.
+8. `Start-ScheduledTask -TaskName ambience-rgb-lights-off` blacks everything
+   without a reboot; then a real restart does.
+9. Whether `Stop-ScheduledTask -TaskName ambience-rgb` is graceful (probably not)
+   and whether a killed daemon is restarted (it is not expected to be).
+10. `netsh int ipv4 show excludedportrange protocol=udp` does not cover 45731.
 
 ## Development
 
@@ -477,8 +647,16 @@ Researched 2026-09-10, written up in
 PYTHONPATH=src /usr/bin/python3 -m unittest discover -s tests
 ```
 
-No network, no hardware, no OpenRGB required — the protocol layers are pure and
-the transports are tested against fakes.
+On Windows, `.venv\Scripts\python -m unittest discover -s tests` in the
+repository; the unix-socket tests skip there and everything else runs.
+
+No network, no hardware, no OpenRGB required — the protocol layers are pure,
+and the transports are tested against real sockets on the loopback.
+
+The Windows-script tests render the scheduled tasks with a real PowerShell when
+one is available -- `pwsh` on `PATH`, or `AMBIENCE_RGB_PWSH` pointing at one --
+and skip only that part otherwise. A portable pwsh from PowerShell's GitHub
+releases, unpacked anywhere, is enough; nothing needs installing.
 
 ### Integration checks
 

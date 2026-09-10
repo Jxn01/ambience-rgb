@@ -3,30 +3,44 @@
 The mapping is the whole personality of this program -- which controller is
 near, which is far, what is left alone. A silent misparse here does not crash,
 it just lights the wrong things, so every rule and every rejection is asserted.
+
+Every test that depends on the platform says which one it means. The suite runs
+on Windows as well, and a test that silently assumed Linux would either fail
+there for no reason or -- worse -- pass there while checking nothing.
 """
 
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from ambience_rgb.config import (
     GROUP_EXCLUDED,
     GROUP_FAR,
     GROUP_NEAR,
     ConfigError,
+    config_search_path,
     load_config,
     parse_config,
+    resolved_config_path,
 )
+from ambience_rgb.transport import DEFAULT_UDP_PORT, LOOPBACK, UdpEndpoint, UnixEndpoint
 
 MINIMAL = {"socket": {"path": "/tmp/x.sock"}}
+SHIPPED = Path(__file__).resolve().parents[1] / "config.example.toml"
+
+
+def _without(*names: str) -> dict:
+    return {key: value for key, value in os.environ.items() if key not in names}
 
 
 class ParsingTest(unittest.TestCase):
-    def test_socket_path_is_required(self) -> None:
+    def test_socket_path_is_required_for_the_unix_socket(self) -> None:
         with self.assertRaises(ConfigError) as caught:
-            parse_config({})
+            parse_config({}, platform="linux")
         self.assertIn("socket.path", str(caught.exception))
         self.assertIn("RGB_PUBLISH_SOCKET", str(caught.exception), "name the other end")
 
@@ -76,22 +90,167 @@ class ParsingTest(unittest.TestCase):
             {"devices": [{"match": "x", "channel_order": "RGX"}]},
             {"devices": [{"match": "x", "static": "#12345"}]},
             {"devices": [{"match": "x", "static": [1, 2, 300]}]},
+            {"socket": {"transport": "udp", "udp_port": "high"}},
+            {"openrgb": {"restart_command": "systemctl restart x"}},
         ):
             with self.subTest(section=section):
                 with self.assertRaises(ConfigError):
-                    parse_config({**MINIMAL, **section})
+                    parse_config({**MINIMAL, **section}, platform="linux")
+
+    def test_broken_toml_is_a_config_error_too(self) -> None:
+        # tomllib raises its own ValueError subclass, which escaped the CLI's
+        # one-line handling as a traceback.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            path.write_text("[socket\npath = 1\n", encoding="utf-8")
+            with self.assertRaises(ConfigError) as caught:
+                load_config(path)
+        self.assertIn(str(path), str(caught.exception))
 
     def test_xdg_runtime_dir_falls_back_when_unset(self) -> None:
         """The shutdown unit runs as root with no XDG_RUNTIME_DIR."""
 
-        saved = os.environ.pop("XDG_RUNTIME_DIR", None)
-        try:
-            config = parse_config({"socket": {"path": "$XDG_RUNTIME_DIR/x.sock"}})
-        finally:
-            if saved is not None:
-                os.environ["XDG_RUNTIME_DIR"] = saved
-        self.assertNotIn("$", str(config.socket_path), "no literal variable survives")
-        self.assertTrue(config.socket_path.is_absolute())
+        with mock.patch.dict(os.environ, _without("XDG_RUNTIME_DIR"), clear=True):
+            config = parse_config({"socket": {"path": "$XDG_RUNTIME_DIR/x.sock"}}, platform="linux")
+        self.assertNotIn("$", str(config.endpoint), "no literal variable survives")
+        self.assertTrue(config.endpoint.path.is_absolute())
+
+
+class TransportSelectionTest(unittest.TestCase):
+    """Which transport a config gets on each platform -- and that choosing never crashes."""
+
+    def test_auto_is_the_unix_socket_on_linux(self) -> None:
+        config = parse_config(MINIMAL, platform="linux")
+        self.assertEqual(config.endpoint, UnixEndpoint(Path("/tmp/x.sock")))
+
+    def test_auto_is_udp_on_windows(self) -> None:
+        config = parse_config(MINIMAL, platform="win32")
+        self.assertEqual(config.endpoint, UdpEndpoint(LOOPBACK, DEFAULT_UDP_PORT))
+
+    def test_windows_needs_no_socket_path(self) -> None:
+        self.assertIsInstance(parse_config({}, platform="win32").endpoint, UdpEndpoint)
+
+    def test_udp_can_be_chosen_on_linux(self) -> None:
+        config = parse_config({"socket": {"transport": "udp", "udp_port": 50000}}, platform="linux")
+        self.assertEqual(config.endpoint, UdpEndpoint(LOOPBACK, 50000))
+
+    def test_the_unix_socket_is_refused_on_windows_with_the_alternative_named(self) -> None:
+        with self.assertRaises(ConfigError) as caught:
+            parse_config({"socket": {"transport": "unix", "path": "x.sock"}}, platform="win32")
+        self.assertIn("udp", str(caught.exception))
+
+    def test_an_unknown_transport_names_the_valid_ones(self) -> None:
+        with self.assertRaises(ConfigError) as caught:
+            parse_config({"socket": {"transport": "pigeon"}}, platform="linux")
+        for name in ("auto", "unix", "udp"):
+            self.assertIn(name, str(caught.exception))
+
+    def test_the_udp_port_must_be_a_port(self) -> None:
+        for port in (0, 65536, -1, "high", 1.5, True):
+            with self.subTest(port=port):
+                with self.assertRaises(ConfigError):
+                    parse_config({"socket": {"transport": "udp", "udp_port": port}}, platform="linux")
+
+    def test_a_relative_path_is_resolved_from_the_config_file(self) -> None:
+        config = parse_config({"socket": {"path": "rel.sock"}}, base_dir=Path("/etc/x"), platform="linux")
+        self.assertEqual(config.endpoint.path, Path("/etc/x/rel.sock").resolve())
+
+    def test_an_unset_variable_is_an_error_not_a_directory_named_dollar(self) -> None:
+        """expandvars leaves an unknown variable in place, verbatim."""
+
+        with mock.patch.dict(os.environ, _without("AMBIENCE_TEST_UNSET"), clear=True):
+            with self.assertRaises(ConfigError) as caught:
+                parse_config({"socket": {"path": "$AMBIENCE_TEST_UNSET/x.sock"}}, platform="linux")
+        self.assertIn("AMBIENCE_TEST_UNSET", str(caught.exception))
+
+    def test_no_getuid_is_a_config_error_not_a_crash(self) -> None:
+        # The runtime-dir fallback needs os.getuid, which Windows does not have.
+        with mock.patch.dict(os.environ, _without("XDG_RUNTIME_DIR"), clear=True):
+            with mock.patch.object(os, "getuid", None, create=True):
+                with self.assertRaises(ConfigError):
+                    parse_config({"socket": {"path": "$XDG_RUNTIME_DIR/x.sock"}}, platform="linux")
+
+
+class RestartCommandTest(unittest.TestCase):
+    """The OpenRGB restart command differs per platform; the config file does not."""
+
+    def _command(self, value, platform: str) -> tuple:
+        return parse_config({**MINIMAL, "openrgb": {"restart_command": value}}, platform=platform).openrgb_restart_command
+
+    def test_a_list_applies_on_every_platform(self) -> None:
+        for platform in ("linux", "win32"):
+            with self.subTest(platform=platform):
+                self.assertEqual(self._command(["a", "b"], platform), ("a", "b"))
+
+    def test_a_table_picks_this_platform(self) -> None:
+        table = {"linux": ["systemctl", "x"], "windows": ["powershell", "y"]}
+        self.assertEqual(self._command(table, "linux"), ("systemctl", "x"))
+        self.assertEqual(self._command(table, "win32"), ("powershell", "y"))
+
+    def test_a_table_without_this_platform_disables_it(self) -> None:
+        self.assertEqual(self._command({"linux": ["systemctl", "x"]}, "win32"), ())
+
+    def test_a_misspelled_platform_is_refused(self) -> None:
+        with self.assertRaises(ConfigError) as caught:
+            self._command({"window": ["powershell"]}, "win32")
+        self.assertIn("windows", str(caught.exception))
+        self.assertIn("linux", str(caught.exception))
+
+    def test_a_string_is_refused_rather_than_run_letter_by_letter(self) -> None:
+        """🚨 ``tuple("systemctl restart x")`` is a tuple of CHARACTERS.
+
+        It used to be accepted, and the restart then ran a program called ``s``
+        -- which does not exist, so the one recovery for a wedged server failed
+        with nothing in the log but a FileNotFoundError.
+        """
+
+        with self.assertRaises(ConfigError):
+            self._command("systemctl --user restart ambience-rgb-openrgb", "linux")
+
+    def test_every_argument_must_be_a_string(self) -> None:
+        with self.assertRaises(ConfigError):
+            self._command(["systemctl", 1], "linux")
+
+
+class SingleColourDeviceTest(unittest.TestCase):
+    """The Commander Core and the Katana: devices configured by group, not by rule."""
+
+    def test_the_katana_is_off_unless_asked_for(self) -> None:
+        # A config written before the Katana existed must not start retrying a
+        # missing serial port every ten seconds, forever.
+        katana = parse_config(MINIMAL).katana
+        self.assertFalse(katana.enabled)
+        self.assertEqual(katana.group, GROUP_FAR)
+        self.assertIsNone(katana.port)
+
+    def test_a_katana_section_parses(self) -> None:
+        katana = parse_config(
+            {**MINIMAL, "katana": {"enabled": True, "group": "near", "rate_hz": 4, "port": "/dev/ttyACM3"}}
+        ).katana
+        self.assertTrue(katana.enabled)
+        self.assertEqual(katana.group, GROUP_NEAR)
+        self.assertAlmostEqual(katana.interval_seconds, 0.25)
+        self.assertEqual(katana.port, "/dev/ttyACM3")
+
+    def test_the_katana_rate_must_be_positive(self) -> None:
+        for rate in (0, -2, "fast"):
+            with self.subTest(rate=rate):
+                with self.assertRaises(ConfigError):
+                    parse_config({**MINIMAL, "katana": {"rate_hz": rate}})
+
+    def test_excluded_is_refused_where_it_cannot_mean_anything(self) -> None:
+        # 🚨 These devices are written whole, so a group of "excluded" cannot
+        # leave part of one alone. It used to be accepted -- and then quietly
+        # driven with the FAR colour, the opposite of what it says.
+        for section in (
+            {"katana": {"group": "excluded"}},
+            {"commander": {"pump_group": "excluded"}},
+            {"commander": {"fan_group": "excluded"}},
+        ):
+            with self.subTest(section=section):
+                with self.assertRaises(ConfigError) as caught:
+                    parse_config({**MINIMAL, **section})
+                self.assertIn("enabled = false", str(caught.exception))
 
 
 class MatchingTest(unittest.TestCase):
@@ -151,53 +310,55 @@ class MatchingTest(unittest.TestCase):
         self.assertEqual(config.rule_for("Corsair Dominator Titanium").group, GROUP_FAR)
 
 
-class SingleColourDeviceTest(unittest.TestCase):
-    """The Commander Core and the Katana: devices configured by group, not by rule."""
+class SearchPathTest(unittest.TestCase):
+    def test_the_override_comes_first(self) -> None:
+        found = config_search_path(
+            platform="linux", environ={"AMBIENCE_RGB_CONFIG": "/x/c.toml", "XDG_CONFIG_HOME": "/cfg"}
+        )
+        self.assertEqual(found[0], Path("/x/c.toml"))
 
-    def test_the_katana_is_off_unless_asked_for(self) -> None:
-        # A config written before the Katana existed must not start retrying a
-        # missing serial port every ten seconds, forever.
-        katana = parse_config(MINIMAL).katana
-        self.assertFalse(katana.enabled)
-        self.assertEqual(katana.group, GROUP_FAR)
-        self.assertIsNone(katana.port)
+    def test_linux_looks_in_xdg_config_home(self) -> None:
+        found = config_search_path(platform="linux", environ={"XDG_CONFIG_HOME": "/cfg"})
+        self.assertIn(Path("/cfg/ambience-rgb/config.toml"), found)
 
-    def test_a_katana_section_parses(self) -> None:
-        katana = parse_config(
-            {**MINIMAL, "katana": {"enabled": True, "group": "near", "rate_hz": 4, "port": "/dev/ttyACM3"}}
-        ).katana
-        self.assertTrue(katana.enabled)
-        self.assertEqual(katana.group, GROUP_NEAR)
-        self.assertAlmostEqual(katana.interval_seconds, 0.25)
-        self.assertEqual(katana.port, "/dev/ttyACM3")
+    def test_windows_looks_in_appdata(self) -> None:
+        found = config_search_path(platform="win32", environ={"APPDATA": "/roaming"})
+        self.assertIn(Path("/roaming/ambience-rgb/config.toml"), found)
 
-    def test_the_katana_rate_must_be_positive(self) -> None:
-        for rate in (0, -2, "fast"):
-            with self.subTest(rate=rate):
-                with self.assertRaises(ConfigError):
-                    parse_config({**MINIMAL, "katana": {"rate_hz": rate}})
+    def test_the_repo_default_is_always_last(self) -> None:
+        for platform in ("linux", "win32"):
+            with self.subTest(platform=platform):
+                self.assertEqual(config_search_path(platform=platform, environ={})[-1], SHIPPED)
 
-    def test_excluded_is_refused_where_it_cannot_mean_anything(self) -> None:
-        # 🚨 These devices are written whole, so a group of "excluded" cannot
-        # leave part of one alone. It used to be accepted -- and then quietly
-        # driven with the FAR colour, the opposite of what it says.
-        for section in (
-            {"katana": {"group": "excluded"}},
-            {"commander": {"pump_group": "excluded"}},
-            {"commander": {"fan_group": "excluded"}},
-        ):
-            with self.subTest(section=section):
-                with self.assertRaises(ConfigError) as caught:
-                    parse_config({**MINIMAL, **section})
-                self.assertIn("enabled = false", str(caught.exception))
+    def test_a_stripped_environment_does_not_crash(self) -> None:
+        """A scheduled task or a service can start with no APPDATA and no home."""
+
+        with mock.patch("ambience_rgb.paths._home_or_none", return_value=None):
+            found = config_search_path(platform="win32", environ={})
+        self.assertEqual(found, [SHIPPED])
+
+    def test_the_resolved_path_is_the_first_that_exists(self) -> None:
+        """What the installers bake into the shutdown task and unit.
+
+        That runs as SYSTEM or root, with a different home and a different
+        environment, so it cannot search for the user's config itself -- it has
+        to be handed the path the daemon would have used.
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            environ = {"XDG_CONFIG_HOME": directory}
+            self.assertEqual(resolved_config_path(platform="linux", environ=environ), SHIPPED)
+            mine = Path(directory) / "ambience-rgb" / "config.toml"
+            mine.parent.mkdir()
+            mine.write_text("[socket]\npath = '/tmp/x.sock'\n", encoding="utf-8")
+            self.assertEqual(resolved_config_path(platform="linux", environ=environ), mine)
 
 
 class ShippedConfigTest(unittest.TestCase):
-    """The example config is the fallback, so it must actually be valid."""
+    """The example config is the fallback, so it must actually be valid -- everywhere."""
 
     def test_it_parses_and_describes_this_rig(self) -> None:
-        path = Path(__file__).resolve().parents[1] / "config.example.toml"
-        config = load_config(path)
+        config = load_config(SHIPPED)
 
         self.assertEqual(config.openrgb_host, "127.0.0.1", "never bind the LAN")
         self.assertTrue(config.commander.enabled)
@@ -221,12 +382,36 @@ class ShippedConfigTest(unittest.TestCase):
     def test_smbus_is_driven_slower_than_usb(self) -> None:
         """SMBus is shared with the sensors; hammering it is the real risk."""
 
-        path = Path(__file__).resolve().parents[1] / "config.example.toml"
-        config = load_config(path)
+        config = load_config(SHIPPED)
         self.assertGreater(config.smbus_interval_seconds, config.usb_interval_seconds)
         for name in ("ASUS TUF GeForce RTX 5090 Gaming OC", "Corsair Dominator Titanium RGB DDR5"):
             with self.subTest(device=name):
                 self.assertEqual(config.rule_for(name).bus, "smbus")
+
+    def test_it_loads_on_windows_without_a_posix_only_call(self) -> None:
+        """🚨 The shipped config used to crash Windows before a single light lit.
+
+        Its socket path is ``$XDG_RUNTIME_DIR/...``. With that variable unset --
+        as it always is on Windows -- the fallback called ``os.getuid()``, which
+        does not exist there: an ``AttributeError`` at config load, on every
+        start, for every entry point including the shutdown task. Windows uses
+        UDP, so the path must not even be looked at.
+        """
+
+        posix_only = AssertionError("a POSIX-only call was made while loading for Windows")
+        with mock.patch.dict(os.environ, _without("XDG_RUNTIME_DIR"), clear=True):
+            with mock.patch.object(os, "getuid", side_effect=posix_only, create=True):
+                config = load_config(SHIPPED, platform="win32")
+        self.assertEqual(config.endpoint, UdpEndpoint(LOOPBACK, DEFAULT_UDP_PORT))
+
+    def test_it_restarts_the_right_openrgb_on_each_platform(self) -> None:
+        linux = load_config(SHIPPED, platform="linux").openrgb_restart_command
+        self.assertIn("systemctl", linux)
+        self.assertIn("ambience-rgb-openrgb.service", linux)
+        windows = " ".join(load_config(SHIPPED, platform="win32").openrgb_restart_command)
+        self.assertIn("Start-ScheduledTask", windows)
+        self.assertIn("ambience-rgb-openrgb", windows)
+        self.assertNotIn("systemctl", windows)
 
 
 if __name__ == "__main__":  # pragma: no cover

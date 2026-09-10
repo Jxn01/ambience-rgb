@@ -84,19 +84,59 @@ class CommanderCoreError(RuntimeError):
     """The controller could not be opened or did not answer as expected."""
 
 
-def find_device_path() -> bytes | None:
-    """The hidraw path for interface 0, or None when the AIO is absent.
+# The control interface, as its own report descriptor names it. Read off this
+# rig: `06 42 ff 09 01` on interface 0, `06 42 ff 09 02` on the dead interface 1.
+CONTROL_USAGE_PAGE = 0xFF42
+CONTROL_USAGE = 0x0001
+
+
+def find_device_path(entries=None) -> bytes | None:
+    """The HID path of the control interface, or None when the AIO is absent.
 
     Interface 1 exists too and answers nothing useful; picking it produces a
     device that opens cleanly and then times out on the first read.
+
+    Matched by USAGE first and interface number second. Linux's hidraw lists one
+    entry per USB interface and always knows the number; Windows hidapi lists
+    one per HID top-level collection and can report ``-1``. Both report the
+    usage, which is the device's own statement of what each interface is.
+    ``entries`` stands in for ``hid.enumerate`` in the tests.
     """
 
-    import hid
+    if entries is None:
+        import hid
 
-    for entry in hid.enumerate(VENDOR_ID, PRODUCT_ID):
-        if entry.get("interface_number") == INTERFACE_NUMBER:
+        entries = hid.enumerate(VENDOR_ID, PRODUCT_ID)
+    entries = list(entries)
+    for entry in entries:
+        if entry.get("usage_page") == CONTROL_USAGE_PAGE and entry.get("usage") == CONTROL_USAGE:
+            return entry["path"]
+    # Only where the usage is unknown: an interface that names itself as
+    # something else is not the control interface, whatever its number.
+    for entry in entries:
+        if entry.get("interface_number") == INTERFACE_NUMBER and not entry.get("usage"):
             return entry["path"]
     return None
+
+
+def openrgb_has_it(controller_names) -> list[str]:
+    """Which of OpenRGB's controllers are this device -- which it must not drive while we do.
+
+    🚨 Two drivers on one HID device is silent: zones read as size 0, colours
+    never apply, and no error appears anywhere. The installers turn OpenRGB's
+    detectors for it off BY NAME, and another OpenRGB version could use another
+    name -- so the sink and ``devices`` check what OpenRGB actually lists.
+    """
+
+    return [name for name in controller_names if "commander core" in name.lower()]
+
+
+CONTENTION_ADVICE = (
+    "OpenRGB has detected {names} while ambience-rgb's own Commander Core driver is on. "
+    "Two drivers on one HID device apply nothing and report no error. Turn off OpenRGB's "
+    "Corsair Commander Core detectors (the installers do it by name, and this OpenRGB may "
+    "name them differently), or set commander.enabled = false."
+)
 
 
 class CommanderCore:
@@ -122,14 +162,16 @@ class CommanderCore:
     # -- lifecycle ---------------------------------------------------------
 
     def open(self) -> "CommanderCore":
-        import hid
-
         path = self._path or find_device_path()
         if path is None:
             raise CommanderCoreError(
-                f"No Corsair Commander Core ({VENDOR_ID:04x}:{PRODUCT_ID:04x}) on interface "
-                f"{INTERFACE_NUMBER}. Is it plugged in, and is OpenRGB's detector for it disabled?"
+                f"No Corsair Commander Core ({VENDOR_ID:04x}:{PRODUCT_ID:04x}) control interface "
+                f"(usage {CONTROL_USAGE_PAGE:04x}:{CONTROL_USAGE:04x}, interface {INTERFACE_NUMBER}). "
+                "Is it plugged in, and is nothing else driving it -- OpenRGB's detector for it, "
+                "or on Windows iCUE's Corsair Service?"
             )
+        import hid
+
         device = hid.device()
         try:
             device.open_path(path)

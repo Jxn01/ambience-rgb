@@ -76,6 +76,41 @@ class ShutdownUnitTest(unittest.TestCase):
     def test_it_waits_for_the_install_directory_to_be_mounted(self) -> None:
         self.assertIn("RequiresMountsFor=", read("ambience-rgb-lights-off.service"))
 
+    def test_it_reads_the_config_the_daemon_reads(self) -> None:
+        """🚨 It used to read the repo's example config, whatever the daemon used.
+
+        Root at shutdown has neither this user's home nor their environment, so
+        it cannot search for their config. With a config of their own, the
+        shutdown pass would black the example's set of devices instead of theirs.
+        The installer resolves the daemon's file and hands it over -- the same
+        fix the Windows shutdown task needed, for the same reason.
+        """
+
+        text = read("ambience-rgb-lights-off.service")
+        self.assertIn("AMBIENCE_RGB_CONFIG=@CONFIG_PATH@", text)
+        directives = [
+            line for line in text.splitlines() if line and not line.lstrip().startswith("#")
+        ]
+        self.assertNotIn("config.example.toml", "\n".join(directives))
+
+    def test_it_waits_for_the_config_to_be_mounted_too(self) -> None:
+        self.assertIn("@CONFIG_DIR@", read("ambience-rgb-lights-off.service"))
+
+
+class InstallerTest(unittest.TestCase):
+    def test_it_fills_in_every_placeholder_the_units_use(self) -> None:
+        """A placeholder the installer does not substitute reaches systemd verbatim."""
+
+        import re
+
+        installer = (UNITS.parent / "scripts" / "install.sh").read_text(encoding="utf-8")
+        used: set[str] = set()
+        for path in UNITS.glob("*.service"):
+            used |= set(re.findall(r"@[A-Z_]+@", path.read_text(encoding="utf-8")))
+        for placeholder in sorted(used):
+            with self.subTest(placeholder=placeholder):
+                self.assertIn(f"s|{placeholder}|", installer)
+
 
 class PlaceholderTest(unittest.TestCase):
     def test_every_unit_uses_the_install_dir_placeholder(self) -> None:

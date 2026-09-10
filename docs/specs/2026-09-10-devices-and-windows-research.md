@@ -1,13 +1,13 @@
 # Research: two more devices, and a Windows port
 
 Three questions, answered with evidence gathered on `jxn-garuda` on 2026-09-10.
-One is ruled out, one has since been built, and one is planned.
+One is ruled out, and the other two have since been built.
 
 | | Verdict | Confidence |
 |---|---|---|
 | Ducky One 3 TKL RGB | **Ruled out** — no host lighting protocol exists to speak | High |
 | Sound Blaster Katana V2X | **Built, 2026-09-10, and live on Linux** — reverse-engineered by someone else; our firmware is the exact tested version; Windows binds it to inbox `usbser` as COM3 | High |
-| Windows port | **Planned** — small hostile surface, pattern already proven next door | Moderate |
+| Windows port | **Built, 2026-09-10; not yet run on Windows** — small hostile surface, pattern already proven next door; see §3 | Moderate, until it has run there |
 
 ---
 
@@ -209,7 +209,22 @@ the Katana would still work on both halves from one code path.
 
 ---
 
-## 3. Windows port — planned
+## 3. Windows port — built 2026-09-10, not yet run on Windows
+
+✅ **Built, and tested from Linux.** Every blocker below has its resolution in
+the code. What each became:
+
+| Blocker | Resolution | Where |
+|---|---|---|
+| 1. IPC | UDP on `127.0.0.1:45731`, which `socket.transport = "auto"` picks on Windows; the unix socket stays on Linux. `SO_EXCLUSIVEADDRUSE` on Windows. A second daemon is refused on both -- and on Linux it can no longer unlink a *live* socket, which it used to. matterlights' `RGB_PUBLISH_SOCKET` takes `udp://HOST:PORT`, and its latent `AttributeError` is fixed and tested against a socket module with no `AF_UNIX`. | `transport.py`, `config.py`; matterlights `rgb_target.py`, `rgb_publish.py` |
+| 2. Service management | Three scheduled tasks named after the three units, from XML that `tests/test_windows_scripts.py` renders and parses with a real pwsh. | `scripts/windows/` |
+| 3. Paths | `paths.py`, which never raises: `%APPDATA%` for the config, `%LOCALAPPDATA%` for the log. The shipped config's `$XDG_RUNTIME_DIR` path is not even read on Windows, which closes an `os.getuid` crash at config load that would have hit every entry point. | `paths.py`, `config.py` |
+| 4. hidapi | `hidapi; sys_platform == 'win32'` in `pyproject.toml`; the venv without system site-packages; the installer checks `hid.device` exists. | `pyproject.toml`, `install.ps1`, `test_packaging.py` |
+| 5. Contention | The installer reports -- or with `-DisableCompetitors` stops and disables -- iCUE's `CorsairService` and SignalRGB's service. Reading the Windows half's registry offline showed **both still set to start automatically**, long after their user interfaces had been taken out of autostart. The daemon and `devices` also flag OpenRGB listing a Commander Core. | `install.ps1`, `sinks.py`, `__main__.py` |
+| 6. Lights-off | A SYSTEM task on event 1074 running `off --stop-daemon`, which stops the daemon and waits for it to release the soundbar's COM port (exclusive on Windows) before blacking again; the session-end window for logoff, which now holds `WM_ENDSESSION` until the black is written. | `session_end/`, `daemon.py`, `scripts/windows/tasks.ps1` |
+
+What only Windows can prove is listed in the README, under *Windows: what is
+verified, and what is not*. The analysis below is the reasoning, kept as written.
 
 The hostile surface is genuinely small, and the pattern is already proven in the
 sibling project.

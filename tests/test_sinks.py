@@ -901,3 +901,83 @@ class WedgeEscalationTest(unittest.TestCase):
         sink._note_reconnect(1.0)
         sink._note_reconnect(1.0 + WEDGE_WINDOW_SECONDS + 1)
         self.assertEqual(len(sink._reconnects), 1, "a reconnect an hour ago is not evidence")
+
+    def _restart_kwargs(self, platform: str) -> dict:
+        import subprocess
+        import sys
+        from unittest import mock
+
+        seen: list[dict] = []
+        with mock.patch.object(subprocess, "run", lambda *a, **k: seen.append(k)), mock.patch.object(
+            sys, "platform", platform
+        ):
+            sink = self._sink(("powershell.exe", "-Command", "x"))
+            for stamp in (1.0, 2.0, 3.0):
+                sink._note_reconnect(stamp)
+        self.assertEqual(len(seen), 1)
+        return seen[0]
+
+    def test_on_windows_the_restart_opens_no_console_window(self) -> None:
+        """The daemon runs under pythonw, which has no console. A console program
+        it starts -- PowerShell, here -- gets a console window of its own, flashing
+        up on the desktop at every OpenRGB restart, unless told not to."""
+
+        from ambience_rgb.sinks import CREATE_NO_WINDOW
+
+        self.assertEqual(self._restart_kwargs("win32").get("creationflags"), CREATE_NO_WINDOW)
+
+    def test_elsewhere_no_windows_only_flag_is_passed(self) -> None:
+        # A non-zero creationflags raises ValueError on POSIX.
+        self.assertFalse(self._restart_kwargs("linux").get("creationflags"))
+
+
+class CommanderContentionTest(unittest.TestCase):
+    """🚨 OpenRGB driving the Commander Core as well is silent.
+
+    Two drivers on one HID device: zones read as size 0, colours never apply,
+    no error anywhere -- which cost this rig a day. The installers turn off
+    OpenRGB's detector for it BY NAME, and another OpenRGB version could use
+    another name. So whenever OpenRGB lists a Commander Core while our own
+    driver is on, the daemon says so at every connect.
+    """
+
+    def _connect(self, names, *, commander: bool = True) -> None:
+        from types import SimpleNamespace
+        from unittest import mock
+
+        controllers = [
+            SimpleNamespace(name=name, index=index, led_count=0, zones=[])
+            for index, name in enumerate(names)
+        ]
+
+        class Server:
+            def __init__(self, *_args, **_kwargs) -> None:
+                self.controllers = controllers
+
+            def connect(self):
+                return self
+
+            def close(self) -> None:
+                pass
+
+        sink = OpenRGBSink(
+            parse_config({"socket": {"path": "/tmp/x.sock"}, "commander": {"enabled": commander}})
+        )
+        with mock.patch("ambience_rgb.sinks.OpenRGBClient", Server):
+            with self.assertRaises(OpenRGBError):  # nothing else to drive in this config
+                sink.connect()
+
+    def test_openrgb_listing_it_beside_our_driver_is_logged_as_an_error(self) -> None:
+        with self.assertLogs("ambience_rgb.sinks", level="ERROR") as logs:
+            self._connect(["Corsair Commander Core"])
+        text = "\n".join(logs.output)
+        self.assertIn("Corsair Commander Core", text)
+        self.assertIn("detector", text, "say what to turn off")
+
+    def test_with_our_driver_off_it_is_openrgbs_to_drive(self) -> None:
+        with self.assertNoLogs("ambience_rgb.sinks", level="ERROR"):
+            self._connect(["Corsair Commander Core"], commander=False)
+
+    def test_other_controllers_raise_nothing(self) -> None:
+        with self.assertNoLogs("ambience_rgb.sinks", level="ERROR"):
+            self._connect(["ASRock X870E Taichi", "Corsair Dominator Titanium RGB DDR5"])

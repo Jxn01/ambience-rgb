@@ -20,6 +20,13 @@ import time
 
 from _readback import REPO_ROOT, Reader, expected_colour, use_matterlights
 
+if sys.platform == "win32":
+    raise SystemExit(
+        "check_failures.py restarts, stops and kills the systemd units, so it is Linux-only. "
+        "On Windows the services are scheduled tasks; check_policy.py, check_soak.py and "
+        "check_hardware.py run there as they are."
+    )
+
 use_matterlights()
 from matterlights.rgb_publish import AmbiencePublisher  # noqa: E402
 
@@ -53,7 +60,7 @@ results: list[bool] = []
 
 
 def pump() -> None:
-    publisher = AmbiencePublisher(CONFIG.socket_path)
+    publisher = AmbiencePublisher(str(CONFIG.endpoint))
     while not stop.is_set():
         publisher.publish(NEAR, FAR, brightness=255, active_ratio=0.5, screen_dark=False,
                           display_on=True, lights_on=True, rgb_on=True)

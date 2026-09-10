@@ -92,7 +92,7 @@ def main() -> int:
     results: list[bool] = []
 
     def check(label, near, far, *, expect_black=False, **flags):
-        publisher = AmbiencePublisher(config.socket_path)
+        publisher = AmbiencePublisher(str(config.endpoint))
         _publish(publisher, near, far, **flags)
         publisher.close()
         time.sleep(1.0)
@@ -153,7 +153,7 @@ def main() -> int:
     # And the one case that needs a palette: a strip must show a gradient, not
     # one averaged tone. This is the seam that was silently disconnected once --
     # every layer correct, nothing joining them.
-    publisher = AmbiencePublisher(config.socket_path)
+    publisher = AmbiencePublisher(str(config.endpoint))
     _publish(
         publisher, (255, 0, 0), (0, 0, 255),
         palette=[((255, 0, 0), 0.4), ((0, 0, 255), 0.35), ((0, 255, 0), 0.25)],

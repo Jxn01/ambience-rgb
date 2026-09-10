@@ -11,18 +11,27 @@ pattern about ten seconds after the last commit, and the ASRock headers fall
 back to the board's own green. So the loop writes on every tick whether the
 colour changed or not, and "off" is a black frame repeated -- which is also why
 stopping the daemon has to write black explicitly on the way out.
+
+**Stopping** comes from four directions and ends the same way -- black written,
+every device released, the endpoint freed, then :attr:`Daemon.finished` set:
+
+* a signal (``SIGTERM`` from systemd, ``SIGINT``/``SIGBREAK`` from a console);
+* the stop command, :data:`STOP_COMMAND`, sent by ``off --stop-daemon`` --
+  Windows' shutdown task, since Windows sends a process no signal;
+* the Windows session-end window (:mod:`ambience_rgb.session_end`), from its
+  own thread;
+* :meth:`Daemon.request_stop`, which the other three all go through.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import signal
-import socket
+import threading
 import time
-from pathlib import Path
 
+from ambience_rgb import transport
 from ambience_rgb.config import Config
 from ambience_rgb.render import cohere
 from ambience_rgb.sinks import ResilientSink, build_sinks
@@ -33,7 +42,8 @@ BLACK = (0, 0, 0)
 
 # How long to wait on the socket before ticking anyway. Short enough that a tick
 # still happens several times a second when matterlights is quiet, so black keeps
-# being refreshed and the Commander Core never falls back to green.
+# being refreshed and the Commander Core never falls back to green. It is also
+# the longest a stop request waits to be noticed.
 RECEIVE_TIMEOUT_SECONDS = 0.5
 
 # With no frame for this long, matterlights is stopped or wedged. Go dark rather
@@ -59,6 +69,24 @@ SUPPORTED_PAYLOAD_VERSION = 2
 # colours, which is exactly what this did before the palette existed.
 MINIMUM_PAYLOAD_VERSION = 1
 
+STOP_COMMAND = json.dumps({"command": "stop"}).encode("utf-8")
+"""The one datagram that is not a frame: black everything, release it, exit 0.
+
+A payload with a ``command`` key is a command, never a frame, so it cannot be
+misread as colours or trip the version warning. Anything that can reach the
+endpoint can send it -- the unix socket is ``0600``, the UDP one listens on the
+loopback only -- which is no more than it could already do by publishing black.
+"""
+
+STOP_TIMEOUT_SECONDS = 5.0
+"""How long ``stop_running_daemon`` waits for the endpoint to free.
+
+Blacking and closing every device takes well under a second here. On Windows the
+shutdown task has roughly fifteen seconds between event 1074 and the end of the
+session, and still has its own black to write after this."""
+
+STOP_POLL_SECONDS = 0.05
+
 
 def _colour(value) -> tuple[int, int, int] | None:
     """A payload field as an RGB triple, or None if it is not one.
@@ -81,40 +109,69 @@ def _colour(value) -> tuple[int, int, int] | None:
 
 
 class Daemon:
-    def __init__(self, config: Config, logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        logger: logging.Logger | None = None,
+        *,
+        sinks_factory=None,
+        session_hook_factory=None,
+        install_signals: bool = True,
+    ) -> None:
         self._config = config
         self._logger = logger or LOGGER
-        self._socket: socket.socket | None = None
+        self._sinks_factory = sinks_factory or build_sinks
+        self._session_hook_factory = session_hook_factory
+        self._install_signals = install_signals
+        self._socket = None
         self._sinks: list[ResilientSink] = []
-        self._running = False
+        self._hook = None
+        self._stop = threading.Event()
+        self._stop_reason: str | None = None
         self._last_frame_at = 0.0
         self._last_colours: tuple[tuple, tuple] | None = None
         self._warned_version = False
+        self.ready = threading.Event()
+        """Set once the endpoint is bound and the sinks are built."""
+        self.finished = threading.Event()
+        """Set once the hardware is black and released and the endpoint freed --
+        or at once, when the start was refused. The Windows session-end window
+        holds the session open on this, so it must never be set early."""
+
+    # -- stopping ----------------------------------------------------------
+
+    def request_stop(self, reason: str) -> None:
+        """Finish the current tick, black everything and exit. Safe from any thread."""
+
+        if not self._stop.is_set():
+            self._stop_reason = reason
+            self._logger.info("Stopping (%s); turning RGB off", reason)
+        self._stop.set()
+
+    def _install_signal_handlers(self) -> None:
+        def handle(signum, _frame):
+            self.request_stop(f"signal {signal.Signals(signum).name}")
+
+        # SIGBREAK is Windows' Ctrl+Break; SIGTERM exists there but nothing
+        # sends it. Each is installed only where the platform has it.
+        for name in ("SIGTERM", "SIGINT", "SIGBREAK"):
+            sig = getattr(signal, name, None)
+            if sig is not None:
+                signal.signal(sig, handle)
+
+    def _start_session_hook(self):
+        factory = self._session_hook_factory
+        if factory is None:
+            from ambience_rgb.session_end import start_session_end_hook as factory
+        return factory(self.request_stop, self.finished, self._logger)
 
     # -- socket ------------------------------------------------------------
-
-    def _bind(self) -> socket.socket:
-        path = self._config.socket_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # A datagram socket left behind by a previous run would make bind fail
-        # with EADDRINUSE even though nothing is listening.
-        if path.exists() or path.is_socket():
-            try:
-                path.unlink()
-            except OSError:
-                pass
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-        sock.bind(str(path))
-        sock.settimeout(RECEIVE_TIMEOUT_SECONDS)
-        os.chmod(path, 0o600)
-        self._logger.info("Listening on %s", path)
-        return sock
 
     def _receive(self) -> dict | None:
         assert self._socket is not None
         try:
             data = self._socket.recv(65535)
-        except socket.timeout:
+        except TimeoutError:
             return None
         except OSError as error:
             self._logger.warning("Receive failed: %s", error)
@@ -125,6 +182,9 @@ class Daemon:
             self._logger.debug("Ignoring an unparseable datagram")
             return None
         if not isinstance(payload, dict):
+            return None
+        if "command" in payload:
+            self._handle_command(payload["command"])
             return None
         version = payload.get("v")
         if not isinstance(version, int) or not (
@@ -140,6 +200,12 @@ class Daemon:
                     SUPPORTED_PAYLOAD_VERSION,
                 )
         return payload
+
+    def _handle_command(self, command) -> None:
+        if command == "stop":
+            self.request_stop("stop command")
+        else:
+            self._logger.debug("Ignoring unknown command %r", command)
 
     # -- decision ----------------------------------------------------------
 
@@ -199,34 +265,42 @@ class Daemon:
 
     # -- lifecycle ---------------------------------------------------------
 
-    def _install_signal_handlers(self) -> None:
-        def handle(signum, _frame):
-            self._logger.info("Signal %s; turning RGB off", signal.Signals(signum).name)
-            self._running = False
-
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            signal.signal(sig, handle)
-
     def run(self) -> int:
-        self._sinks = build_sinks(self._config, self._logger)
-        self._socket = self._bind()
-        self._install_signal_handlers()
-        self._running = True
-        self._last_frame_at = time.monotonic()
+        endpoint = self._config.endpoint
+        try:
+            self._socket = transport.bind(endpoint, timeout=RECEIVE_TIMEOUT_SECONDS)
+        except transport.TransportError as error:
+            # 🚨 Refused BEFORE any sink exists, deliberately. The exit path
+            # below blacks every sink, so a second daemon that got as far as
+            # building them would blank the case under the first one's colours.
+            self._logger.error("%s", error)
+            self.finished.set()
+            return 1
+        self._logger.info("Listening on %s", endpoint)
 
         try:
+            self._sinks = self._sinks_factory(self._config, self._logger)
+            self._hook = self._start_session_hook()
+            if self._install_signals:
+                self._install_signal_handlers()
+            self._last_frame_at = time.monotonic()
+            self.ready.set()
             self._loop()
         finally:
             # Every exit path blacks the hardware. Without this the devices sit
             # on whatever they were last told, then drift back to firmware
             # colours a few seconds later -- which looks exactly like a crash.
             self._shutdown()
+        # A requested stop is a success. Task Scheduler records the exit code,
+        # and a stop that read as a failure would look like a crash there.
         return 0
 
     def _loop(self) -> None:
         latest: dict | None = None
-        while self._running:
+        while not self._stop.is_set():
             payload = self._receive()
+            if self._stop.is_set():
+                break
             if payload is not None:
                 latest = payload
                 self._last_frame_at = time.monotonic()
@@ -251,26 +325,75 @@ class Daemon:
             sink.black()
         for sink in self._sinks:
             sink.close()
+        # The endpoint is released only after every device is: whoever is
+        # waiting for it to free -- off --stop-daemon -- may open them next.
         if self._socket is not None:
-            self._socket.close()
+            transport.release(self._config.endpoint, self._socket)
             self._socket = None
-        try:
-            self._config.socket_path.unlink()
-        except OSError:
-            pass
+        if self._hook is not None:
+            self._hook.stop()
+            self._hook = None
         self._logger.info("RGB off; stopped")
+        self.finished.set()
 
 
-def lights_off(config: Config, logger: logging.Logger | None = None) -> int:
-    """Write black once and exit. Used by the shutdown unit.
+def stop_running_daemon(
+    config: Config,
+    logger: logging.Logger | None = None,
+    *,
+    timeout: float = STOP_TIMEOUT_SECONDS,
+) -> bool:
+    """Ask the daemon on ``config.endpoint`` to stop, and wait until it has.
 
-    Deliberately does the least possible: open each sink, black it, close. No
-    socket, no loop, no waiting on matterlights -- this runs while the machine
-    is already going down.
+    True once the endpoint is free -- which the daemon releases only after
+    blacking and closing every device -- or at once when nothing held it. False
+    when it is still held after ``timeout``: a wedged daemon, or some other
+    program on the port.
     """
 
     log = logger or LOGGER
-    for sink in build_sinks(config, log):
+    endpoint = config.endpoint
+    if not transport.is_listening(endpoint):
+        log.info("No daemon is listening on %s", endpoint)
+        return True
+    try:
+        transport.send(endpoint, STOP_COMMAND)
+    except (OSError, transport.TransportError) as error:
+        log.warning("Could not send the stop command to %s: %s", endpoint, error)
+        return False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not transport.is_listening(endpoint):
+            log.info("The daemon on %s has stopped", endpoint)
+            return True
+        time.sleep(STOP_POLL_SECONDS)
+    log.warning("The daemon on %s did not stop within %.0f s", endpoint, timeout)
+    return False
+
+
+def lights_off(
+    config: Config,
+    logger: logging.Logger | None = None,
+    *,
+    stop_daemon: bool = False,
+    sinks_factory=None,
+) -> int:
+    """Write black once and exit. What the shutdown unit and task run.
+
+    Deliberately does the least possible: open each sink, black it, close. No
+    loop, no waiting on matterlights -- this runs while the machine is already
+    going down.
+
+    ``stop_daemon`` first stops a running daemon and waits for it to let go.
+    Windows needs that: it opens the soundbar's COM port exclusively, so this
+    could not reach it while the daemon held it -- and the daemon's next tick
+    would repaint over this black anyway.
+    """
+
+    log = logger or LOGGER
+    if stop_daemon and not stop_running_daemon(config, log):
+        log.warning("Blacking anyway; a device the daemon still holds may refuse to open")
+    for sink in (sinks_factory or build_sinks)(config, log):
         try:
             sink.black()
         finally:

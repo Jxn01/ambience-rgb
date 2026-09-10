@@ -91,6 +91,10 @@ WEDGE_WINDOW_SECONDS = 120.0
 # ones held at a static colour.
 RESTART_COOLDOWN_SECONDS = 300.0
 
+# Windows' CREATE_NO_WINDOW process-creation flag. Spelled out because the
+# subprocess module only defines it on Windows, and the tests run everywhere.
+CREATE_NO_WINDOW = 0x08000000
+
 
 @contextmanager
 def released_on_failure(sink) -> Iterator[None]:
@@ -245,6 +249,14 @@ class OpenRGBSink:
             self._config.openrgb_host, self._config.openrgb_port, logger=self._logger
         ).connect()
         self._client = client
+        if self._config.commander.enabled:
+            from ambience_rgb.commander_core import CONTENTION_ADVICE, openrgb_has_it
+
+            contenders = openrgb_has_it(controller.name for controller in client.controllers)
+            if contenders:
+                self._logger.error(
+                    "openrgb: %s", CONTENTION_ADVICE.format(names=", ".join(contenders))
+                )
         self._sent.clear()
         self._targets = self._plan(client)
         self._planned_controllers = len(client.controllers)
@@ -465,12 +477,15 @@ class OpenRGBSink:
             return
         command = self._config.openrgb_restart_command
         if not command:
+            from ambience_rgb import hints
+
             self._logger.error(
                 "openrgb: %d reconnects in %.0fs and still not healthy -- the server is "
-                "wedged. Restart it: systemctl --user restart ambience-rgb-openrgb "
-                "(or set openrgb.restart_command to do it automatically)",
+                "wedged. Restart it: %s (or set openrgb.restart_command to do it "
+                "automatically)",
                 len(self._reconnects),
                 WEDGE_WINDOW_SECONDS,
+                hints.restart_openrgb(),
             )
             self._reconnects.clear()
             return
@@ -484,9 +499,14 @@ class OpenRGBSink:
             " ".join(command),
         )
         import subprocess
+        import sys
 
+        # 🚨 Under pythonw there is no console, so a console program started from
+        # here -- PowerShell, on Windows -- gets a window of its own, flashing up
+        # on the desktop at every restart. POSIX rejects the flag: Windows only.
+        extra = {"creationflags": CREATE_NO_WINDOW} if sys.platform == "win32" else {}
         try:
-            subprocess.run(list(command), check=False, capture_output=True, timeout=30)
+            subprocess.run(list(command), check=False, capture_output=True, timeout=30, **extra)
         except Exception:  # noqa: BLE001 - a failed restart must not kill the daemon
             self._logger.exception("openrgb: restart command failed")
 

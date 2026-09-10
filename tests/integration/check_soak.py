@@ -33,7 +33,7 @@ def main() -> int:
     duration = float(sys.argv[1]) if len(sys.argv) > 1 else 300.0
     config = load_config()
     reader = Reader(config.openrgb_host, config.openrgb_port)
-    publisher = AmbiencePublisher(config.socket_path)
+    publisher = AmbiencePublisher(str(config.endpoint))
 
     targets = []
     for controller in reader.controllers:

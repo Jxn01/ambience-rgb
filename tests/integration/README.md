@@ -8,9 +8,17 @@ daemon. They are **not** collected by `unittest discover`, which only picks up
 scripts/integration.sh            # policy + soak, the two safe ones
 python tests/integration/check_policy.py
 python tests/integration/check_soak.py 600
-python tests/integration/check_failures.py    # restarts and kills services
+python tests/integration/check_failures.py    # restarts and kills services (Linux only)
 python tests/integration/check_hardware.py    # asks you what you saw: AIO, then soundbar
 ```
+
+On Windows, run them with the venv's interpreter from the repository --
+`.venv\Scripts\python tests\integration\check_policy.py` -- since
+`scripts/integration.sh` is bash. They read the same config the daemon does, so
+they talk to it over whichever transport it uses: the unix socket on Linux, UDP
+on Windows. They publish through matterlights' own `AmbiencePublisher`, found
+beside this repository or at `$MATTERLIGHTS_SRC`, so the wire format tested is
+the one matterlights really sends.
 
 ## Why these exist
 
@@ -45,31 +53,41 @@ payload, which spans many packets, was being truncated.
 
 **Only `check_hardware.py` can fail for that reason**, because it asks a person.
 Run it whenever the transport, the packet framing or the report size changes, and
-before believing any claim that the lights work.
+before believing any claim that the lights work -- including the first run on
+Windows, where the HID stack underneath is a different one.
 
 It covers both devices this project drives with its own code: the Commander Core,
 then the Katana soundbar. The soundbar phase writes each colour **once** -- the
 device holds its colour, unlike the AIO -- prints what the soundbar reports back
 alongside, and restores the colour it found. It refuses to run while the daemon
-is up, because exactly one process may drive each of these devices.
+is up, because exactly one process may drive each of these devices, and says how
+to stop it on the platform it is on.
 
 ## The first thing to check when the AIO is dark but everything looks healthy
+
+Ask the device what shape it expects. On Linux:
 
 ```bash
 od -An -tx1 /sys/class/hidraw/hidraw20/device/report_descriptor
 #  75 08 96 40 00  ->  Report Size 8 bits x Report Count 0x0040 = 64 bytes
 ```
 
-Compare with `REPORT_LENGTH` in `src/ambience_rgb/commander_protocol.py`. Ask the
-device what shape it expects before auditing your implementation of the shape you
-assumed.
+On Windows, read the same descriptor with a USB viewer such as USB Device Tree
+Viewer; Windows states the output report length including the report-ID byte,
+so there it reads 65.
+
+Compare with `REPORT_LENGTH` in `src/ambience_rgb/commander_protocol.py` before
+auditing your implementation of the shape you assumed. Then make sure nothing
+else drives the device: OpenRGB's Commander Core detector, CoolerControl's
+liquidctl on Linux, iCUE's Corsair Service on Windows.
 
 ## Notes
 
 - `check_failures.py` restarts `ambience-rgb-openrgb`, SIGKILLs `ambience-rgb` and
   stops it. It puts everything back, but do not run it while you care about the
-  lights holding steady.
+  lights holding steady. It drives the systemd units, so it is **Linux-only** and
+  refuses to start on Windows.
 - `check_policy.py` and `check_soak.py` publish frames themselves. If matterlights
   is also publishing (a screen is being captured), the two streams interleave and
-  assertions become flaky — stop `matterlights-sync` first, or run them while the
+  assertions become flaky — stop matterlights' sync first, or run them while the
   session is locked.

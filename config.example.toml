@@ -7,9 +7,21 @@
 # over this one, and $AMBIENCE_RGB_CONFIG wins over both.
 
 [socket]
-# Must match RGB_PUBLISH_SOCKET in matterlights' .env. $XDG_RUNTIME_DIR is the
-# right home for it: tmpfs, per-user, cleaned up at logout.
+# How matterlights reaches this daemon. It must match RGB_PUBLISH_SOCKET in
+# matterlights' .env -- `ambience-rgb devices` prints the exact value to paste.
+#
+#   auto   the unix socket on Linux, UDP on Windows (the default)
+#   unix   a unix datagram socket at `path`; refused on Windows, which has none
+#   udp    UDP on 127.0.0.1:`udp_port`; RGB_PUBLISH_SOCKET=udp://127.0.0.1:<port>
+transport = "auto"
+
+# The unix socket. $XDG_RUNTIME_DIR is the right home for it: tmpfs, per-user,
+# cleaned up at logout. Not read at all when the transport is UDP.
 path = "$XDG_RUNTIME_DIR/ambience-rgb.sock"
+
+# The UDP port, always on 127.0.0.1. Kept below 49152, Windows' dynamic range,
+# where Hyper-V and WSL reserve ports at boot. Not read for the unix socket.
+udp_port = 45731
 
 [openrgb]
 # 127.0.0.1 deliberately. OpenRGB's own default is 0.0.0.0, which puts control
@@ -24,11 +36,21 @@ port = 6742
 # effect on any device. The daemon's liveness probe cannot detect that, because
 # the server IS live. Reconnecting does not help either. Only a restart did.
 #
-# So after three reconnects inside two minutes the daemon calls this, at most
-# once every five minutes. Leave it empty to only log loudly instead: restarting
-# another unit is a real side effect, and it resets every device including ones
-# held at a static colour.
-restart_command = ["systemctl", "--user", "restart", "ambience-rgb-openrgb.service"]
+# So after three reconnects inside two minutes the daemon runs this, at most
+# once every five minutes. A plain list applies on every platform; a table picks
+# by platform (`linux`, `windows`), and a platform with no entry only logs
+# loudly instead. Restarting another program is a real side effect: it resets
+# every device, including ones held at a static colour.
+[openrgb.restart_command]
+linux = ["systemctl", "--user", "restart", "ambience-rgb-openrgb.service"]
+# ⚠️ Stop, then WAIT for the task to leave "Running", then start. The task's
+# policy is IgnoreNew, so a start issued while the stop is still in flight is
+# silently dropped and the server simply stays down -- the trap matterlights hit
+# with its own tasks. The wait is bounded at ten seconds.
+windows = [
+    "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+    "Stop-ScheduledTask -TaskName ambience-rgb-openrgb; $n = 0; while ((Get-ScheduledTask -TaskName ambience-rgb-openrgb).State -eq 'Running' -and $n -lt 50) { Start-Sleep -Milliseconds 200; $n++ }; Start-ScheduledTask -TaskName ambience-rgb-openrgb",
+]
 
 [rates]
 # Per BUS, not global. USB HID devices are happy at the full sync rate; SMBus is
@@ -93,12 +115,14 @@ fan_group = "far"
 # a power cycle, and whether every colour write reaches its flash is not known.
 # A write that is never sent cannot wear anything.
 #
-# Needs the udev rule that scripts/install.sh installs, so that this user can
-# open the port and ModemManager leaves it alone.
+# On Linux it needs the udev rule scripts/install.sh installs, so that this user
+# can open the port and ModemManager leaves it alone. On Windows it is a COM port
+# from the inbox usbser driver and needs nothing -- but Windows opens a COM port
+# exclusively, so nothing else (Creative's app, for one) may be holding it.
 enabled = true
 group = "far"
 rate_hz = 2.0
-# port = "/dev/ttyACM0"   # unset: found by its USB IDs, 041e:3283 or 041e:3260
+# port = "/dev/ttyACM0"   # or "COM3"; unset: found by its USB IDs, 041e:3283 or 041e:3260
 
 # --- devices ---------------------------------------------------------------
 # `match` is a case-insensitive SUBSTRING of the OpenRGB controller name, not an

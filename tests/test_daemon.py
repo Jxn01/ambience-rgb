@@ -229,3 +229,35 @@ class MalformedColourTest(unittest.TestCase):
                 for colour in Daemon.colours_for({**FRAME, "near": bad}, stale=False):
                     self.assertEqual(len(colour), 3)
                     self.assertTrue(all(isinstance(c, int) for c in colour))
+
+
+class StaleThresholdTest(unittest.TestCase):
+    """🚨 The staleness window must clear the publisher's worst blocking call.
+
+    It was 3.0 s while matterlights' Home Assistant timeout was also 3.0 s, so a
+    bulb that stopped answering blocked its loop for exactly as long as this
+    waits before calling the publisher dead. Result: the entire case blanked for
+    three seconds on every bulb timeout -- two blackouts in three minutes,
+    measured, each exactly 3.0 s and each aligned with a ReadTimeout upstream.
+
+    A publisher stalled on a slow network call is not a dead publisher.
+    """
+
+    def test_it_clears_several_home_assistant_timeouts(self) -> None:
+        from linux_rgb.daemon import STALE_AFTER_SECONDS
+
+        ha_timeout = 3.0
+        self.assertGreater(
+            STALE_AFTER_SECONDS, ha_timeout * 3,
+            "must survive three sequential bulb timeouts without blanking",
+        )
+
+    def test_it_still_notices_a_genuinely_dead_publisher(self) -> None:
+        """Holding a frozen colour forever is the failure this guards against."""
+
+        from linux_rgb.daemon import STALE_AFTER_SECONDS
+
+        self.assertLessEqual(STALE_AFTER_SECONDS, 15.0)
+
+    def test_a_stale_frame_still_blacks(self) -> None:
+        self.assertEqual(Daemon.colours_for(FRAME, stale=True), (BLACK, BLACK))

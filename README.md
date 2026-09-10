@@ -176,7 +176,7 @@ the daemon writes on every tick rather than only on change.
 | **RGB** switch off (dashboard) | Black |
 | **Lamp** master switch off | **Ignored — RGB keeps syncing.** It has its own switch. |
 | Custom colour/pattern mode | Black — this syncs ambient mode only |
-| MatterLights stops | Black after 3 s, rather than freezing on the last colour |
+| MatterLights stops | Black after 10 s, rather than freezing on the last colour |
 | SIGTERM / logout | Black, then exit |
 | Shutdown | `ExecStop` writes black |
 
@@ -297,6 +297,17 @@ others for exactly this reason. If it comes back, look for
 `commander-core: write failed` in the journal rather than suspecting the fans.
 
 **Colours lag or stutter.** Lower `rates.smbus_hz` first.
+
+**Everything blanks for a few seconds, every minute or two.** The publisher
+stopped publishing for longer than `STALE_AFTER_SECONDS`, and going dark is the
+correct response — a frozen frame is indistinguishable from working sync. The
+cause is usually upstream and blocking rather than dead: matterlights' Home
+Assistant call blocks the whole loop while a flaky bulb fails to answer, so one
+unreachable Matter bulb stalls the screen capture too. That threshold must stay
+comfortably above the publisher's worst blocking call; when it was 3 s and the
+Home Assistant timeout was also 3 s, every bulb timeout blanked the case.
+Correlate `journalctl --user -u matterlights-sync | grep ReadTimeout` against the
+blackouts before suspecting anything here.
 
 **The RGB is dark but the lamps are on.** Check the dashboard's *RGB* switch —
 it is independent of the lamps' switch by design.

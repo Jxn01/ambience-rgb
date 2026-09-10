@@ -38,7 +38,19 @@ RECEIVE_TIMEOUT_SECONDS = 0.5
 
 # With no frame for this long, matterlights is stopped or wedged. Go dark rather
 # than hold the last colour forever -- a frozen frame looks like working sync.
-STALE_AFTER_SECONDS = 3.0
+#
+# 🚨 **This must exceed the publisher's worst BLOCKING call, not just its tick.**
+# It was 3.0, and matterlights' Home Assistant timeout is also 3.0: a single bulb
+# that stopped answering blocked its loop for exactly as long as this waits
+# before declaring the publisher dead. The whole case blanked for three seconds
+# every time a flaky bulb timed out -- measured at 05:15 on 2026-09-10, two
+# blackouts in three minutes, each precisely 3.0 s and each aligned with a
+# `ReadTimeout` in the publisher's log.
+#
+# A publisher stalled on a slow network call is not a dead publisher. 10 s clears
+# three sequential Home Assistant timeouts and still notices a genuinely stopped
+# publisher well before anyone wonders why the colour is frozen.
+STALE_AFTER_SECONDS = 10.0
 
 # The publisher's payload version this daemon understands.
 SUPPORTED_PAYLOAD_VERSION = 2

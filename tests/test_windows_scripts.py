@@ -172,7 +172,11 @@ class PowerShellTest(unittest.TestCase):
         result = subprocess.run(
             [PWSH, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
-            text=True,
+            # pwsh writes UTF-8 on Linux and the console's code page on Windows.
+            # All it prints here is ASCII -- the scripts are ASCII by test -- so
+            # UTF-8 reads both, and a stray byte must not raise.
+            encoding="utf-8",
+            errors="replace",
             timeout=120,
             env={**os.environ, **(env or {})},
         )

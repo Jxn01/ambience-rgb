@@ -17,6 +17,12 @@ It checks the two independent ways a secret gets in: by **filename** (a file tha
 is obviously a credential store) and by **content** (a token-shaped string in a
 file nobody thought of as a credential store).
 
+**It is a `unittest.TestCase`, not bare pytest functions,** because the
+documented command is `python -m unittest discover -s tests` and that command
+does not see pytest functions at all. As first written, this file ran zero tests
+under it and the suite still said OK: a guard the documented command skips
+guards nothing. pytest collects a `TestCase` just the same.
+
 **On the patterns being built by concatenation:** a literal JWT prefix written
 out in this file would be found by this file's own sweep, and the test would fail
 forever on itself. Same class as ``pgrep -f`` matching the shell that runs it.
@@ -27,9 +33,8 @@ from __future__ import annotations
 
 import re
 import subprocess
+import unittest
 from pathlib import Path
-
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -92,10 +97,10 @@ def _tracked_files() -> list[str]:
     try:
         out = subprocess.run(
             ["git", "-C", str(REPO_ROOT), "ls-files", "-z"],
-            capture_output=True, check=True, text=True,
+            capture_output=True, check=True, encoding="utf-8",
         ).stdout
-    except (OSError, subprocess.CalledProcessError):  # pragma: no cover - not a git checkout
-        pytest.skip("not a git checkout")
+    except (OSError, subprocess.CalledProcessError) as error:  # pragma: no cover - not a git checkout
+        raise unittest.SkipTest(f"not a git checkout: {error}") from error
     return [name for name in out.split("\0") if name]
 
 
@@ -106,46 +111,62 @@ def _read(name: str) -> str | None:
         return None  # binary or unreadable: nothing to read a token out of
 
 
-def test_no_secret_shaped_filename_is_tracked() -> None:
-    offenders = [
-        name
-        for name in _tracked_files()
-        if SECRET_FILENAMES.search(name) and name not in FILENAME_ALLOWED
-    ]
-    assert not offenders, (
-        "These files are tracked by git and look like credential stores:\n  "
-        + "\n  ".join(offenders)
-        + "\nUntrack them (`git rm --cached <file>`) and widen .gitignore."
-    )
+class RepoHygieneTest(unittest.TestCase):
+    def test_no_secret_shaped_filename_is_tracked(self) -> None:
+        offenders = [
+            name
+            for name in _tracked_files()
+            if SECRET_FILENAMES.search(name) and name not in FILENAME_ALLOWED
+        ]
+        self.assertFalse(
+            offenders,
+            "These files are tracked by git and look like credential stores:\n  "
+            + "\n  ".join(offenders)
+            + "\nUntrack them (`git rm --cached <file>`) and widen .gitignore.",
+        )
 
+    def test_no_tracked_file_contains_a_jwt(self) -> None:
+        offenders = [
+            name
+            for name in _tracked_files()
+            if (text := _read(name)) is not None and JWT.search(text)
+        ]
+        self.assertFalse(
+            offenders, "JWT-shaped token found in tracked files:\n  " + "\n  ".join(offenders)
+        )
 
-def test_no_tracked_file_contains_a_jwt() -> None:
-    offenders = [
-        name
-        for name in _tracked_files()
-        if (text := _read(name)) is not None and JWT.search(text)
-    ]
-    assert not offenders, (
-        "JWT-shaped token found in tracked files:\n  " + "\n  ".join(offenders)
-    )
-
-
-def test_no_env_style_file_assigns_a_real_credential() -> None:
-    offenders: list[str] = []
-    for name in _tracked_files():
-        if not ENV_STYLE.search(name):
-            continue
-        text = _read(name)
-        if text is None:
-            continue
-        for number, line in enumerate(text.splitlines(), start=1):
-            if line.lstrip().startswith("#"):
+    def test_no_env_style_file_assigns_a_real_credential(self) -> None:
+        offenders: list[str] = []
+        for name in _tracked_files():
+            if not ENV_STYLE.search(name):
                 continue
-            match = ASSIGNMENT.match(line)
-            if not match or not SECRET_KEY.search(match.group(1)):
+            text = _read(name)
+            if text is None:
                 continue
-            if not _is_placeholder(match.group(2)):
-                offenders.append(f"{name}:{number}: {match.group(1)} looks like a real value")
-    assert not offenders, (
-        "Real-looking credentials in tracked env-style files:\n  " + "\n  ".join(offenders)
-    )
+            for number, line in enumerate(text.splitlines(), start=1):
+                if line.lstrip().startswith("#"):
+                    continue
+                match = ASSIGNMENT.match(line)
+                if not match or not SECRET_KEY.search(match.group(1)):
+                    continue
+                if not _is_placeholder(match.group(2)):
+                    offenders.append(f"{name}:{number}: {match.group(1)} looks like a real value")
+        self.assertFalse(
+            offenders,
+            "Real-looking credentials in tracked env-style files:\n  " + "\n  ".join(offenders),
+        )
+
+    def test_the_guards_still_bite(self) -> None:
+        """A sweep over nothing, or a pattern that matches nothing, passes forever."""
+
+        self.assertIn("tests/test_repo_hygiene.py", _tracked_files(), "the sweep sees this repo")
+        self.assertTrue(SECRET_FILENAMES.search(".env.bak-040827"), "the file that actually leaked")
+        self.assertTrue(SECRET_FILENAMES.search("deploy/.env.local"))
+        token = "ey" + "J" + "a" * 20 + "." + "b" * 20 + "." + "c" * 20
+        self.assertTrue(JWT.search(token), "the shape of the token that actually leaked")
+        self.assertFalse(_is_placeholder("k" * 40), "a long random value is a real one")
+        self.assertTrue(_is_placeholder("replace-with-your-long-lived-token"))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

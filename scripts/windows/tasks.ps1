@@ -31,11 +31,13 @@ function Get-AmbienceTaskSettingsXml {
         The Settings block the three tasks share.
     .PARAMETER ExecutionTimeLimit
         PT0S -- no limit -- for the two that run all session. Task Scheduler's
-        default is PT72H: it stops a task after three days, so a daemon left at
-        the default would go dark on the fourth morning of an uptime.
+        default is PT72H: it stops a task three days after its trigger started
+        it, so a daemon left at the default would go dark on the fourth morning
+        of an uptime. (One started on demand is exempt.)
     .PARAMETER RestartOnFailure
         Up to three restarts, a minute apart. This covers a failure to START
-        only: Task Scheduler does not treat a non-zero exit as a failure.
+        only: by every report found, Task Scheduler does not count a non-zero
+        exit as a failure. Microsoft's documentation never defines one.
     #>
     param(
         [Parameter(Mandatory)][string]$ExecutionTimeLimit,

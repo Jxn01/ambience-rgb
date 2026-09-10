@@ -65,8 +65,11 @@ class EndpointTest(unittest.TestCase):
     """
 
     def test_a_unix_endpoint_prints_as_its_path(self) -> None:
-        endpoint = UnixEndpoint(Path("/run/user/1000/ambience-rgb.sock"))
-        self.assertEqual(str(endpoint), "/run/user/1000/ambience-rgb.sock")
+        # str(path), not a literal: on a Windows host the same Path prints with
+        # backslashes -- and a unix endpoint is refused there before anything
+        # could print it. The literal made this fail on Windows, and only there.
+        path = Path("/run/user/1000/ambience-rgb.sock")
+        self.assertEqual(str(UnixEndpoint(path)), str(path))
 
     def test_a_udp_endpoint_prints_as_a_url(self) -> None:
         self.assertEqual(str(UdpEndpoint(LOOPBACK, 45731)), "udp://127.0.0.1:45731")

@@ -75,7 +75,7 @@ def sh(*args: str) -> None:
 def show(prop: str) -> str:
     return subprocess.run(
         ["systemctl", "--user", "show", "ambience-rgb", "-p", prop, "--value"],
-        capture_output=True, text=True,
+        capture_output=True, encoding="utf-8",
     ).stdout.strip()
 
 

@@ -667,8 +667,9 @@ design guesses into facts:
   pwsh -- a portable one from PowerShell's releases, unpacked in scratch -- renders
   and parses every task from Linux. The XML that registers is the XML tested.
 - **No self-restart.** Task Scheduler's restart-on-failure covers a failure to
-  *start*; an exit with an error code is not a failure to it, by its
-  documentation and every report found. A repetition trigger would restart a
+  *start*; an exit with an error code does not count. That rests on forum
+  reports alone -- Microsoft's page for the setting never says what a failure
+  is -- so the Windows checklist tests it. A repetition trigger would restart a
   crashed daemon -- and would also undo every deliberate stop within minutes,
   while the daemon already keeps every sink failure to itself
   (`ResilientSink._guard` catches everything). Documented instead.
@@ -685,8 +686,12 @@ design guesses into facts:
 - 🚨 **`pythonw` has no stderr.** `sys.stderr` is `None`, and a stream handler on
   it drops every line in silence. Without a console the log goes to a rotating,
   timestamped file in `%LOCALAPPDATA%\ambience-rgb`.
-- 🚨 **Task Scheduler stops every task after 72 hours** unless told otherwise.
-  Both logon tasks carry `PT0S`, read back out of the rendered XML by a test.
+- 🚨 **Task Scheduler stops a task 72 hours after its trigger started it**
+  unless told otherwise -- Microsoft's `ITaskSettings::ExecutionTimeLimit` page,
+  which also says a task started on demand is exempt, so an install that starts
+  its tasks by hand never shows it. Both logon tasks carry `PT0S`, read back out
+  of the rendered XML by a test. matterlights' own logon tasks did not; see
+  *2026-09-10, late* below.
 - **`IgnoreNew` drops a start issued while a stop is still in flight** -- the trap
   matterlights hit restarting its own tasks. The installer and the Windows
   OpenRGB restart command stop, wait for the task to leave Running (bounded),
@@ -769,6 +774,77 @@ The README's list, in order. The two that matter most: whether iCUE's service
 fights for the AIO even with iCUE's window closed (disable it either way), and a
 real restart for the event-1074 task, which is the only layer that blacks the
 case at a Windows shutdown.
+
+## 2026-09-10, late: the suite on Windows CPython
+
+A review of the port before it was reported found a test that would error on
+Windows, and with it the question the port had skirted: nothing had ever run
+with `sys.platform == "win32"`. Wine 11.15 was already installed here, so the
+suite went onto the real Windows build of CPython -- python.org's embeddable
+3.12.10, the dependencies as Windows wheels, a Wine prefix of its own, nothing
+installed. That is `scripts/test-under-wine.sh` now.
+
+### First, show it can see the class
+
+Two failures were written down before the first run: the `$XDG_RUNTIME_DIR`
+fallback test, which needs `os.getuid`, and its twin, a Linux load of the
+shipped config inside a restart-command test. It went red on both -- and on a
+third nobody predicted, a unix endpoint compared with a forward-slash string,
+which on Windows prints with backslashes. All three were the tests'
+assumptions, not the product's: Windows never parses a unix path (it is UDP
+there) and never prints a unix endpoint. Each now tests the same thing on
+either host, and the run is green: **455 tests, 20 skipped** -- the unix-socket
+tests, the PowerShell ones (no pwsh inside Wine) and the hygiene sweep (no git).
+
+One failure along the way was Wine's own. `Z:` is the live Linux tree, so a
+POSIX runtime path -- relative on Windows, joined to the config's directory and
+resolved -- landed on the running daemon's real socket: WinError 433. Real
+Windows would have found nothing there. The test now hands the Linux load a
+runtime directory that is absolute on whichever host runs it.
+
+What it cannot vouch for: the UDP and session-end tests ran against Wine's
+Winsock and `user32`. Their passing is a good sign, not proof, which is why the
+suite on Windows itself is item 2 of the README's checklist.
+
+### The code pages, off the Windows disk
+
+ANSI 1252 and OEM 850, from `ControlSet001\Control\Nls\CodePage` in the SYSTEM
+hive -- the pair Wine picked too. That settles what an unlabelled read does
+there: cp1252 has no character for `81 8D 8F 90 9D`, and raises. `⚠️` ends in
+`8F`.
+
+### Every text-mode file and pipe names its encoding
+
+`python -X warn_default_encoding` over both suites found nothing here and eight
+sites in matterlights' tests. It sees only what a test executes, so an AST guard
+now reads the source of both repositories -- `tests/test_text_encoding.py`,
+identical in each, with cases proving it flags every shape and leaves
+`device.open()` alone. Its first run found five more: the pwsh runner in this
+suite and `check_failures.py`; in matterlights, two `systemctl` calls and -- the
+one that mattered -- the dashboard's PowerShell poll, which decoded Windows
+PowerShell's cp850 as cp1252. cp850 writes `ü` as `81`, and cp1252 raises on
+it. That poll now decodes as `"oem"` and cannot raise.
+
+### Also fixed
+
+- **The repo-hygiene test ran nowhere.** Both repositories' copies were bare
+  pytest functions, and the documented command, `unittest discover`, never
+  collects those: zero tests ran from that file, and the suite said OK. They are
+  `unittest.TestCase`s now, with a positive control proving each pattern still
+  catches the file and the token shape that actually leaked.
+- 🚨 **matterlights' logon tasks had the 72-hour limit.** Their stored XML on the
+  Windows disk has no `ExecutionTimeLimit` at all -- the PT72H default -- because
+  its `install-autostart.ps1` never set one, so a sync left running through three
+  days logged in would have been stopped by the scheduler. The script sets
+  `PT0S` now; the installed tasks keep the old limit until it is re-run, which
+  is on the checklist.
+- **"By its documentation" was an overclaim.** These notes said Task Scheduler's
+  restart-on-failure ignores a non-zero exit by its documentation; Microsoft's
+  page never defines a failure, and only forum reports say so. Reworded here, in
+  the README and in `tasks.ps1`, and checklist item 10 tests it.
+
+Tests: 455 here, green on Linux 3.14 and 3.12 and on Windows CPython under Wine;
+matterlights 280 on Linux, and its RGB publisher tests on Windows CPython too.
 
 ## Deliberately not done
 

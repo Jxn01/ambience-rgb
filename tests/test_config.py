@@ -108,12 +108,18 @@ class ParsingTest(unittest.TestCase):
         self.assertIn(str(path), str(caught.exception))
 
     def test_xdg_runtime_dir_falls_back_when_unset(self) -> None:
-        """The shutdown unit runs as root with no XDG_RUNTIME_DIR."""
+        """The shutdown unit runs as root with no XDG_RUNTIME_DIR.
+
+        ``os.getuid`` is pinned rather than taken from the host. The fallback is
+        Linux's, and a Windows host -- this suite runs there too -- has no
+        ``getuid`` at all; ``test_no_getuid_is_a_config_error_not_a_crash``
+        covers that side. Unpinned, this test errored on Windows.
+        """
 
         with mock.patch.dict(os.environ, _without("XDG_RUNTIME_DIR"), clear=True):
-            config = parse_config({"socket": {"path": "$XDG_RUNTIME_DIR/x.sock"}}, platform="linux")
-        self.assertNotIn("$", str(config.endpoint), "no literal variable survives")
-        self.assertTrue(config.endpoint.path.is_absolute())
+            with mock.patch.object(os, "getuid", return_value=1000, create=True):
+                config = parse_config({"socket": {"path": "$XDG_RUNTIME_DIR/x.sock"}}, platform="linux")
+        self.assertEqual(config.endpoint, UnixEndpoint(Path("/run/user/1000/x.sock")))
 
 
 class TransportSelectionTest(unittest.TestCase):
@@ -405,7 +411,14 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertEqual(config.endpoint, UdpEndpoint(LOOPBACK, DEFAULT_UDP_PORT))
 
     def test_it_restarts_the_right_openrgb_on_each_platform(self) -> None:
-        linux = load_config(SHIPPED, platform="linux").openrgb_restart_command
+        # The Linux half of this runs on Windows too, which has neither
+        # XDG_RUNTIME_DIR nor os.getuid to stand in for it -- this errored
+        # there. The runtime dir given is absolute on whatever host runs this:
+        # a POSIX /run/user path is relative on Windows, so it was joined to the
+        # config's directory and resolved -- and under Wine, whose Z: is the
+        # live Linux tree, that resolve landed on the real daemon's socket.
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": tempfile.gettempdir()}):
+            linux = load_config(SHIPPED, platform="linux").openrgb_restart_command
         self.assertIn("systemctl", linux)
         self.assertIn("ambience-rgb-openrgb.service", linux)
         windows = " ".join(load_config(SHIPPED, platform="win32").openrgb_restart_command)

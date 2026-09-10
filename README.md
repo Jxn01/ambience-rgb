@@ -203,12 +203,15 @@ The daemon only `Wants=` the OpenRGB server. A dead server should cost the
 motherboard and RAM, not the AIO, which needs no server at all.
 
 On Windows both logon tasks run without a time limit -- Task Scheduler's default
-stops a task after 72 hours -- and are retried up to three times if they fail to
-*start*. That is all Task Scheduler's restart-on-failure covers: an exit with an
-error code is not a failure to it, so there is no equivalent of the unit's
-`Restart=on-failure`. The daemon keeps every sink's failures to itself and does
-not fall over on bad hardware; should it ever stop, `Start-ScheduledTask
--TaskName ambience-rgb` or a fresh logon starts it again.
+stops a task 72 hours after its trigger started it (one started on demand is
+exempt) -- and are retried up to three times if they fail to *start*. By every
+report found, that is all its restart-on-failure covers: an exit with an error
+code does not count. Microsoft's documentation of the setting never says what
+does, so checklist item 10 below finds out on the real machine; either way,
+nothing here stands in for the unit's `Restart=on-failure`. The daemon keeps
+every sink's failures to itself and does not fall over on bad hardware; should
+it ever stop, `Start-ScheduledTask -TaskName ambience-rgb` or a fresh logon
+starts it again.
 
 ## Configuration
 
@@ -569,9 +572,10 @@ daemon (`off --stop-daemon`) before running `devices` or `check_hardware.py`.
 
 **The daemon is not running.** `Get-ScheduledTask -TaskName ambience-rgb` shows
 its state and last result, and `Start-ScheduledTask -TaskName ambience-rgb`
-starts it. A crash is not restarted -- Task Scheduler's restart-on-failure only
-covers a failure to start -- so a stopped daemon stays stopped until then or the
-next logon.
+starts it. A crash is not expected to be restarted -- by every report, Task
+Scheduler's restart-on-failure covers only a failure to start, and checklist
+item 10 confirms it -- so a stopped daemon stays stopped until then or the next
+logon.
 
 **matterlights publishes but nothing arrives.** Compare `RGB_PUBLISH_SOCKET` in
 its `.env` with what `devices` prints. A port another program holds, or one
@@ -588,7 +592,7 @@ Researched 2026-09-10, written up in
 |---|---|
 | **Ducky One 3 TKL RGB** | **Ruled out.** Its RGB is onboard-only — no host lighting software exists, so there is nothing to capture and no protocol to speak. The vendor HID interface is for firmware. All the open-source prior art targets the One **2**, a different vendor ID. |
 | **Sound Blaster Katana V2X** | **Driven since 2026-09-10** — see *The Katana driver*. Live on Linux; on Windows it is `COM3` through the inbox `usbser` driver, and the same code opens it there — the most portable device in the project, needing no OpenRGB server and no HID. ⚠️ If you own one, hold off on firmware `1.30.260813.1100`: it post-dates the published protocol and nobody has checked it. |
-| **Windows** | **Built 2026-09-10; not yet run there.** See the next section. |
+| **Windows** | **Built 2026-09-10; not yet run there**, though its whole suite passes on Windows CPython under Wine. See the next section. |
 
 ## Windows: what is verified, and what is not
 
@@ -599,8 +603,7 @@ Linux. That covers more than it sounds like -- and less.
 
 - The UDP transport, both directions, against real sockets: a second daemon
   refused with the first undisturbed, the loopback-only bind, the stop command,
-  and the endpoint freed only after every device is released. The same tests
-  run on Windows unchanged.
+  and the endpoint freed only after every device is released.
 - The whole suite under Python 3.12 -- the Windows half's interpreter -- as well
   as 3.14.
 - The session-end window's decisions (query, end, cancelled end, close, console
@@ -611,6 +614,20 @@ Linux. That covers more than it sounds like -- and less.
   event-1074 subscription, `PT0S`, escaping. Every script parses, and is plain
   ASCII so that Windows PowerShell 5.1 reads it as written.
 - matterlights' UDP publisher, including Windows' next-send `WSAECONNRESET`.
+- Every text-mode file and pipe names its encoding. A guard test reads the
+  source for it, so code only Windows runs is covered too: Python there reads
+  an unlabelled file as cp1252, which has no character for five bytes UTF-8
+  uses -- the tail of `⚠️` is one -- and raises.
+
+**Verified on Windows CPython, under Wine** (`scripts/test-under-wine.sh`): the
+whole suite, on python.org's embeddable 3.12.10. There `sys.platform` really is
+`win32`, `os.getuid` and `socket.AF_UNIX` really are absent, and the locale
+really is cp1252 -- the same code pages as the Windows half, read from its
+registry. Its first run failed three tests that could only pass on a POSIX
+host; all three are fixed, and it is green. What Wine cannot vouch for is
+Windows itself: the UDP and session-end tests ran against Wine's Winsock and
+`user32`, so their passing is a good sign, not proof. The PowerShell and
+repo-hygiene tests skip there -- no pwsh, no git.
 
 **Verified live on Linux, 2026-09-10, on the real hardware:** the daemon on UDP
 with every sink connected; a second daemon refused with exit 1 and the first
@@ -623,23 +640,30 @@ matterlights' own publisher over UDP; `off --stop-daemon` stopping it with exit
 
 1. `scripts\windows\install.ps1` runs clean from an elevated PowerShell, and all
    three tasks appear in Task Scheduler.
-2. OpenRGB on Windows: whether `--server --server-host 127.0.0.1` starts it
+2. The unit suite, `.venv\Scripts\python -m unittest discover -s tests` in the
+   repository. Green on Windows CPython under Wine; never yet on Windows
+   itself, with its real sockets and `user32` -- and with PowerShell 7 on
+   `PATH`, the task XML is rendered there too.
+3. OpenRGB on Windows: whether `--server --server-host 127.0.0.1` starts it
    without a window, whether the elevated task reaches SMBus (RAM, GPU), whether
    its controller names still match the config's substrings, and whether
    `%APPDATA%\OpenRGB\OpenRGB.json` is really where it keeps its settings.
-3. Nothing else drives the Commander Core: iCUE's `CorsairService` and
+4. Nothing else drives the Commander Core: iCUE's `CorsairService` and
    `SignalRgb.Service` stopped and disabled (`-DisableCompetitors`).
-4. `devices` with the daemon stopped: the Commander Core found through Windows'
+5. `devices` with the daemon stopped: the Commander Core found through Windows'
    hidapi, the Katana on `COM3`.
-5. `tests\integration\check_hardware.py`: eyes on the AIO and the soundbar.
-6. matterlights, pulled and restarted with `RGB_PUBLISH_SOCKET=udp://127.0.0.1:45731`,
-   drives the case.
-7. A logoff blacks everything -- the session-end window.
-8. `Start-ScheduledTask -TaskName ambience-rgb-lights-off` blacks everything
+6. `tests\integration\check_hardware.py`: eyes on the AIO and the soundbar.
+7. matterlights, pulled and restarted with `RGB_PUBLISH_SOCKET=udp://127.0.0.1:45731`,
+   drives the case. Re-run its `scripts\install-autostart.ps1` too: its two
+   tasks were registered with Task Scheduler's 72-hour limit, and afterwards
+   `(Get-ScheduledTask 'MatterLights Screen Sync').Settings.ExecutionTimeLimit`
+   reads `PT0S`.
+8. A logoff blacks everything -- the session-end window.
+9. `Start-ScheduledTask -TaskName ambience-rgb-lights-off` blacks everything
    without a reboot; then a real restart does.
-9. Whether `Stop-ScheduledTask -TaskName ambience-rgb` is graceful (probably not)
-   and whether a killed daemon is restarted (it is not expected to be).
-10. `netsh int ipv4 show excludedportrange protocol=udp` does not cover 45731.
+10. Whether `Stop-ScheduledTask -TaskName ambience-rgb` is graceful (probably not)
+    and whether a killed daemon is restarted (it is not expected to be).
+11. `netsh int ipv4 show excludedportrange protocol=udp` does not cover 45731.
 
 ## Development
 
@@ -657,6 +681,22 @@ The Windows-script tests render the scheduled tasks with a real PowerShell when
 one is available -- `pwsh` on `PATH`, or `AMBIENCE_RGB_PWSH` pointing at one --
 and skip only that part otherwise. A portable pwsh from PowerShell's GitHub
 releases, unpacked anywhere, is enough; nothing needs installing.
+
+From Linux, the same suite also runs on **Windows CPython**, under Wine:
+
+```bash
+scripts/test-under-wine.sh            # any further arguments go to `unittest discover`
+```
+
+It fetches python.org's embeddable build -- 3.12.10, the Windows half's, or
+`AMBIENCE_WINE_PYTHON` -- and the dependencies as Windows wheels into
+`~/.cache/ambience-rgb-wine` (`AMBIENCE_WINE_CACHE`), with a Wine prefix of its
+own. Nothing is installed; deleting that directory starts over. It needs
+`wine`, `curl` and `unzip`, and the network on its first run. It is the run
+that sees what a Linux host hides -- a test or a code path that assumes POSIX
+paths, `os.getuid`, `AF_UNIX` or a UTF-8 locale -- and it cannot judge Winsock
+or `user32`, which are Wine's. The PowerShell and repo-hygiene tests skip under
+it: there is no pwsh or git inside.
 
 ### Integration checks
 

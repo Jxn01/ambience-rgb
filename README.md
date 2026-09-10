@@ -95,6 +95,7 @@ repo. `$LINUX_RGB_CONFIG` overrides both.
 |---|---|
 | `socket.path` | Must equal MatterLights' `RGB_PUBLISH_SOCKET`. `$XDG_RUNTIME_DIR` is expanded, with a working fallback when root runs it at shutdown. |
 | `openrgb.host` / `openrgb.port` | SDK server. Keep the host on the loopback. |
+| `openrgb.restart_command` | Run this when the server wedges beyond reconnecting. Empty = log only. |
 | `rates.usb_hz` / `rates.smbus_hz` | Update rate **per bus**. |
 | `commander.enabled` | Drive the AIO at all. |
 | `commander.pump_group` / `commander.fan_group` | `near` or `far`. |
@@ -233,8 +234,20 @@ be *told*, and until they are they cycle their firmware pattern while accepting
 and discarding every colour. `set_direct_mode` sends `UPDATE_MODE` (1101) with
 the mode echoed back verbatim.
 
-**Everything is frozen on an old colour and the logs are clean.** The OpenRGB
-server has stopped reading its socket. It can wedge with a client's packets
+**Everything is frozen on an old colour and the logs are clean.** Two different
+server faults look identical from here.
+
+*It stopped reading its socket* — visible as a growing Recv-Q, and the daemon's
+round-trip probe catches it.
+
+*It answers normally and drives nothing* — round trips at 0.1 ms, new connections
+served, controllers reported, and writes with no effect on any device. **No probe
+can see this, because the server is live.** Reconnecting does not help; only a
+restart does. The daemon now escalates to `openrgb.restart_command` after three
+reconnects inside two minutes, at most once every five.
+
+The original description follows: the OpenRGB server has stopped reading its
+socket. It can wedge with a client's packets
 unread and near-zero CPU, leaking `CLOSE-WAIT` connections with large receive
 queues (`ss -tnp | grep 6742` shows them). The daemon now detects this itself —
 it times a request/reply every 5 s and drops the connection when the server does

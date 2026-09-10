@@ -14,6 +14,19 @@ path = "$XDG_RUNTIME_DIR/linux-rgb.sock"
 host = "127.0.0.1"
 port = 6742
 
+# 🚨 This server can stop driving hardware while still answering perfectly.
+#
+# Observed 2026-09-10: round trips at 0.1 ms, new connections served, seven
+# controllers reported -- and three consecutive colour writes with no visible
+# effect on any device. The daemon's liveness probe cannot detect that, because
+# the server IS live. Reconnecting does not help either. Only a restart did.
+#
+# So after three reconnects inside two minutes the daemon calls this, at most
+# once every five minutes. Leave it empty to only log loudly instead: restarting
+# another unit is a real side effect, and it resets every device including ones
+# held at a static colour.
+restart_command = ["systemctl", "--user", "restart", "linux-rgb-openrgb.service"]
+
 [rates]
 # Per BUS, not global. USB HID devices are happy at the full sync rate; SMBus is
 # shared with the sensors that fan control and monitoring read, and hammering it

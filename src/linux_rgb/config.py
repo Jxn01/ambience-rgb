@@ -99,6 +99,18 @@ class Config:
     openrgb_port: int = 6742
     usb_interval_seconds: float = 0.2
     smbus_interval_seconds: float = 1.0
+    openrgb_restart_command: tuple[str, ...] = ()
+    """How to restart the OpenRGB server when it wedges beyond reconnecting.
+
+    🚨 **This server can stop driving hardware while still answering.** Observed
+    on 2026-09-10: round trips at 0.1 ms, new connections served normally, seven
+    controllers reported -- and three consecutive colour writes with no effect on
+    any device. The liveness probe cannot see that, because the server IS live.
+    Only restarting it recovered.
+
+    Empty disables it, which is the default: restarting another unit is a real
+    side effect and has to be opted into.
+    """
     saturation: float = 1.0
     """Push colours away from grey before writing them. 1.0 disables it.
 
@@ -289,6 +301,7 @@ def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
         openrgb_port=int(openrgb.get("port", 6742)),
         usb_interval_seconds=interval("usb_hz", 5.0),
         smbus_interval_seconds=interval("smbus_hz", 1.0),
+        openrgb_restart_command=tuple(openrgb.get("restart_command", ()) or ()),
         saturation=_positive(colour.get("saturation", 1.0), "colour.saturation"),
         gamma=_positive(colour.get("gamma", 1.0), "colour.gamma"),
         group_cohesion=_fraction(colour.get("group_cohesion", 0.0), "colour.group_cohesion"),

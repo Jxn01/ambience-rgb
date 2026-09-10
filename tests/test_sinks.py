@@ -702,3 +702,94 @@ class ChannelOrderReachesTheWireTest(unittest.TestCase):
         sink, client = self._sink([(6, (("near", 4, "GRB"),), "usb", False)])
         sink.black()
         self.assertEqual(set(client.writes[0][2]), {(0, 0, 0)})
+
+
+class WedgeEscalationTest(unittest.TestCase):
+    """🚨 Reconnecting does not fix a server that answers but drives nothing.
+
+    Observed 2026-09-10: round trips at 0.1 ms, new connections served, seven
+    controllers reported -- and three consecutive colour writes with no effect on
+    any device. The liveness probe cannot see it, because the server IS live.
+    Only a restart recovered, and until now only a human could do that.
+    """
+
+    def setUp(self) -> None:
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    def _sink(self, command=()):
+        payload = {"socket": {"path": "/tmp/x.sock"}}
+        if command:
+            payload["openrgb"] = {"restart_command": list(command)}
+        sink = OpenRGBSink(parse_config(payload))
+        sink.close = lambda: None  # type: ignore[method-assign]
+        return sink
+
+    def test_a_few_reconnects_do_not_trigger_a_restart(self) -> None:
+        """A dropped connection is normal; it must not restart a service."""
+
+        import linux_rgb.sinks as module
+
+        calls = []
+        sink = self._sink(("true",))
+        original = module.OpenRGBSink._note_reconnect
+        sink._note_reconnect(1.0)
+        self.assertEqual(sink._reconnects, [1.0])
+
+    def test_it_escalates_after_repeated_reconnects(self) -> None:
+        import subprocess
+
+        seen = []
+        real_run = subprocess.run
+        subprocess.run = lambda *a, **k: seen.append(a[0]) or real_run(["true"], capture_output=True)
+        try:
+            sink = self._sink(("echo", "restart"))
+            for stamp in (1.0, 2.0, 3.0):
+                sink._note_reconnect(stamp)
+        finally:
+            subprocess.run = real_run
+        self.assertEqual(seen, [["echo", "restart"]])
+
+    def test_without_a_command_it_only_logs(self) -> None:
+        """Restarting another unit is a real side effect and is opt-in."""
+
+        import subprocess
+
+        seen = []
+        real_run = subprocess.run
+        subprocess.run = lambda *a, **k: seen.append(a[0])
+        try:
+            sink = self._sink()
+            for stamp in (1.0, 2.0, 3.0):
+                sink._note_reconnect(stamp)
+        finally:
+            subprocess.run = real_run
+        self.assertEqual(seen, [])
+
+    def test_the_cooldown_prevents_a_restart_loop(self) -> None:
+        """A restart loop is worse than a frozen rig -- it also resets every
+        device, including ones held at a static colour."""
+
+        import subprocess
+        from linux_rgb.sinks import RESTART_COOLDOWN_SECONDS
+
+        seen = []
+        real_run = subprocess.run
+        subprocess.run = lambda *a, **k: seen.append(a[0]) or real_run(["true"], capture_output=True)
+        try:
+            sink = self._sink(("echo", "x"))
+            for stamp in (1.0, 2.0, 3.0):
+                sink._note_reconnect(stamp)
+            for stamp in (4.0, 5.0, 6.0):
+                sink._note_reconnect(stamp)
+        finally:
+            subprocess.run = real_run
+        self.assertEqual(len(seen), 1, "the second burst is inside the cooldown")
+
+    def test_old_reconnects_fall_out_of_the_window(self) -> None:
+        from linux_rgb.sinks import WEDGE_WINDOW_SECONDS
+
+        sink = self._sink()
+        sink._note_reconnect(1.0)
+        sink._note_reconnect(1.0 + WEDGE_WINDOW_SECONDS + 1)
+        self.assertEqual(len(sink._reconnects), 1, "a reconnect an hour ago is not evidence")

@@ -72,6 +72,18 @@ HEALTH_TIMEOUT_SECONDS = 5.0
 # 3 tolerates a genuine hiccup and still reports a wedged server in ~15 s.
 HEALTH_FAILURES_BEFORE_RECONNECT = 3
 
+# Reconnects inside this window before the server is declared wedged rather than
+# merely slow. Reconnecting fixes a dropped connection; it does nothing for a
+# server that answers promptly and drives nothing, which is a state this one
+# reaches. At that point only a restart helps.
+WEDGE_RECONNECTS = 3
+WEDGE_WINDOW_SECONDS = 120.0
+
+# Never restart the server more often than this, whatever happens. A restart
+# loop would be worse than a frozen rig: it also resets every device, including
+# ones held at a static colour.
+RESTART_COOLDOWN_SECONDS = 300.0
+
 
 @contextmanager
 def released_on_failure(sink) -> Iterator[None]:
@@ -181,6 +193,11 @@ class OpenRGBSink:
         self._sent: dict[tuple, tuple[tuple[RGB, RGB], float]] = {}
         self._checked_at = 0.0
         self._health_failures = 0
+        self._reconnects: list[float] = []
+        # ⚠️ None, not 0.0. time.monotonic() is boot-relative, so a 0.0 sentinel
+        # makes the cooldown swallow the FIRST restart for the first five
+        # minutes of uptime -- exactly when a wedge at startup would matter.
+        self._restarted_at: float | None = None
 
     def connect(self) -> None:
         client = OpenRGBClient(
@@ -362,16 +379,51 @@ class OpenRGBSink:
                 )
                 return
             self._logger.warning(
-                "openrgb: server has not answered %d checks; dropping the connection. "
-                "If this repeats, the server is wedged: "
-                "systemctl --user restart linux-rgb-openrgb",
+                "openrgb: server has not answered %d checks; dropping the connection",
                 self._health_failures,
             )
             self.close()
+            self._note_reconnect(now)
             raise
         self._health_failures = 0
         if lag > 0.5:
             self._logger.info("openrgb: server is %.2fs behind", lag)
+
+    def _note_reconnect(self, now: float) -> None:
+        """Count reconnects, and restart the server if they are not helping."""
+
+        self._reconnects = [
+            stamp for stamp in self._reconnects if now - stamp < WEDGE_WINDOW_SECONDS
+        ]
+        self._reconnects.append(now)
+        if len(self._reconnects) < WEDGE_RECONNECTS:
+            return
+        command = self._config.openrgb_restart_command
+        if not command:
+            self._logger.error(
+                "openrgb: %d reconnects in %.0fs and still not healthy -- the server is "
+                "wedged. Restart it: systemctl --user restart linux-rgb-openrgb "
+                "(or set openrgb.restart_command to do it automatically)",
+                len(self._reconnects),
+                WEDGE_WINDOW_SECONDS,
+            )
+            self._reconnects.clear()
+            return
+        if self._restarted_at is not None and now - self._restarted_at < RESTART_COOLDOWN_SECONDS:
+            return
+        self._restarted_at = now
+        self._reconnects.clear()
+        self._logger.error(
+            "openrgb: wedged after %d reconnects; restarting it with %s",
+            WEDGE_RECONNECTS,
+            " ".join(command),
+        )
+        import subprocess
+
+        try:
+            subprocess.run(list(command), check=False, capture_output=True, timeout=30)
+        except Exception:  # noqa: BLE001 - a failed restart must not kill the daemon
+            self._logger.exception("openrgb: restart command failed")
 
     def _should_send(self, key: tuple, colours: tuple[RGB, RGB], now: float) -> bool:
         """Whether this target needs the packet, or already shows these colours.

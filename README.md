@@ -103,6 +103,9 @@ repo. `$LINUX_RGB_CONFIG` overrides both.
 | `devices[].bus` | `usb` or `smbus`, selecting which rate applies. |
 | `devices[].zones` | Per-zone group overrides, e.g. `{ "IO Cover" = "near" }`. |
 | `devices[].static` | A fixed colour (`"#rrggbb"` or `[r, g, b]`) set once per connection instead of synced. |
+| `colour.saturation` | Push each channel away from the mean of the three. `1.0` disables it. |
+| `colour.gamma` | Spread the channels apart. Raises saturation; does **not** dim a colour already at peak. `1.0` disables it. |
+| `spread.bias` | How hard each LED is pulled back to its group's single colour. `1.0` = flat (original behaviour), `0.0` = raw palette gradient. |
 
 ⚠️ **`match` is a substring, not an exact name, deliberately.** OpenRGB renames
 devices between versions — the Commander Core's ports went from `RGB Port 1` to
@@ -112,6 +115,33 @@ silently stop matching and the device would just stop lighting.
 ⚠️ **`smbus_hz` should stay well below `usb_hz`.** SMBus is shared with the
 sensors that fan control and monitoring read. Hammering it is the one genuinely
 risky thing this program does.
+
+## Depth, and why the LEDs are not sent the bulbs' colours
+
+Two deliberate divergences from "mirror the bulbs", both because a bulb and an
+LED are different instruments.
+
+**Colour.** MatterLights renders for Home Assistant: a colour plus a brightness,
+shown by a diffuse lamp across a room. An addressable LED is a point source at
+full output an arm's length away. Identical chromaticity, completely different
+perception — a 6%-saturated pale green reads as tinted on a lamp and as plain
+white on a strip. `colour.saturation` and `colour.gamma` push the LEDs somewhere
+that *looks* like the lamps, which means sending them different numbers.
+
+**Depth.** The ambience engine clusters each frame into a weighted palette of up
+to four colours, then collapses it to one per group — because six bulbs cannot
+show more than six colours. This rig has a 97-LED motherboard header and three
+8-LED fan rings. `spread.bias` puts the palette back as a gradient across each
+strip, so a frame shows its actual colours instead of their average, while still
+respecting the near/far split.
+
+Needs matterlights payload **v2** or later. With an older publisher the palette
+is absent, every strip goes flat, and that is exactly the pre-v2 behaviour — the
+fallback is the well-trodden path, not a special case.
+
+⚠️ **`spread.bias = 1.0` disables the gradient completely**, which is the safe
+default in `config.example.toml`'s absence and the thing to set when comparing
+against old behaviour.
 
 ## When the lights go off
 

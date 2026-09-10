@@ -484,6 +484,11 @@ class ReleaseOnFailureTest(unittest.TestCase):
 
         class Dead:
             blacked = 0
+            pump_leds = 29
+            port_leds = [8, 8, 8, 0, 0, 0]
+
+            def set_direct(self, pump, ports):
+                raise RuntimeError("Reply 0x01 does not acknowledge command 0x07")
 
             def set_colour(self, pump, fans):
                 raise RuntimeError("Reply 0x01 does not acknowledge command 0x07")
@@ -536,14 +541,23 @@ class CommanderWritesEveryTickTest(unittest.TestCase):
     """
 
     class _Device:
+        pump_leds = 29
+        port_leds = [8, 8, 8, 0, 0, 0]
+
         def __init__(self) -> None:
             self.colours: list[tuple] = []
+
+        def set_direct(self, pump, ports) -> None:
+            self.colours.append((tuple(pump), tuple(tuple(p) for p in ports)))
 
         def set_colour(self, pump, fans) -> None:
             self.colours.append((pump, fans))
 
         def black(self) -> None:
             self.colours.append(((0, 0, 0), (0, 0, 0)))
+
+        def release(self) -> None:
+            pass
 
         def close(self) -> None:
             pass
@@ -570,3 +584,77 @@ class CommanderWritesEveryTickTest(unittest.TestCase):
         for _ in range(5):
             sink.black()
         self.assertEqual(len(device.colours), 5)
+
+
+class PaletteReachesTheWireTest(unittest.TestCase):
+    """🚨 The guard for a feature that was fully built and never connected.
+
+    render.spread was correct and unit-tested, the config parsed, the daemon
+    extracted the palette -- and OpenRGBSink.write called _send_colours without
+    it, so every LED still got one flat colour. 163 unit tests passed throughout,
+    because each layer was tested in isolation and nothing asserted that a
+    palette handed to a SINK comes out as a varying array.
+
+    Test the seam, not just the pieces either side of it.
+    """
+
+    def setUp(self) -> None:
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    PALETTE = [((255, 0, 0), 0.4), ((0, 0, 255), 0.35), ((0, 255, 0), 0.25)]
+
+    def _sink(self, targets, bias):
+        sink = OpenRGBSink(
+            parse_config({"socket": {"path": "/tmp/x.sock"}, "spread": {"bias": bias}})
+        )
+        sink._interval = lambda _bus: 0.0  # type: ignore[method-assign]
+        sink._check_health = lambda _now: None  # type: ignore[method-assign]
+        client = _FakeClient()
+        sink._client = client
+        sink._targets = list(targets)
+        return sink, client
+
+    def test_a_palette_produces_a_VARYING_array_on_the_wire(self) -> None:
+        sink, client = self._sink([(6, (("far", 40),), "usb", False)], 0.0)
+        sink.write(NEAR, FAR, self.PALETTE)
+        colours = client.writes[0][2]
+        self.assertEqual(len(colours), 40)
+        self.assertGreater(len(set(colours)), 3, "the palette never reached the wire")
+
+    def test_no_palette_is_still_flat(self) -> None:
+        sink, client = self._sink([(6, (("far", 40),), "usb", False)], 0.0)
+        sink.write(NEAR, FAR, [])
+        self.assertEqual(set(client.writes[0][2]), {FAR})
+
+    def test_bias_one_is_flat_even_with_a_palette(self) -> None:
+        """The off switch has to actually switch it off."""
+
+        sink, client = self._sink([(6, (("far", 40),), "usb", False)], 1.0)
+        sink.write(NEAR, FAR, self.PALETTE)
+        self.assertEqual(set(client.writes[0][2]), {FAR})
+
+    def test_the_per_zone_path_gets_the_palette_too(self) -> None:
+        sink, client = self._sink([(6, ((3, "far", 40),), "usb", True)], 0.0)
+        sink.write(NEAR, FAR, self.PALETTE)
+        self.assertGreater(len(set(client.writes[0][2])), 3)
+
+    def test_a_changed_palette_resends_even_when_near_and_far_hold_still(self) -> None:
+        """Otherwise the gradient freezes whenever the two group colours do."""
+
+        sink, client = self._sink([(6, (("far", 40),), "usb", False)], 0.0)
+        sink.write(NEAR, FAR, self.PALETTE)
+        client.writes.clear()
+        moved = [((0, 255, 255), 0.4), ((255, 255, 0), 0.35), ((255, 0, 255), 0.25)]
+        sink.write(NEAR, FAR, moved)
+        self.assertEqual(len(client.writes), 1, "a moving palette must keep being written")
+
+    def test_each_group_keeps_its_own_base(self) -> None:
+        """near/far survives the gradient; it is a real choice about the room."""
+
+        sink, client = self._sink(
+            [(6, (("near", 20), ("far", 20)), "usb", False)], 0.9
+        )
+        sink.write((255, 0, 0), (0, 0, 255), self.PALETTE)
+        colours = client.writes[0][2]
+        self.assertGreater(sum(c[0] for c in colours[:20]), sum(c[0] for c in colours[20:]))

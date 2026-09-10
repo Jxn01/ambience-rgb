@@ -24,6 +24,7 @@ from matterlights.rgb_publish import AmbiencePublisher  # noqa: E402
 
 sys.path.insert(0, str(REPO_ROOT / "src"))
 from linux_rgb.config import load_config  # noqa: E402
+from linux_rgb.render import treat  # noqa: E402
 
 NEAR = (255, 0, 0)
 FAR = (0, 0, 255)
@@ -56,8 +57,12 @@ def _observed(reader: Reader, plan):
 
 
 def _publish(publisher, near, far, seconds=3.0, **flags):
+    # Deliberately publishes NO palette. These cases are about the daemon's
+    # decisions -- which group a device belongs to, and when everything must go
+    # black -- and a gradient would make "the zone shows the far colour" a much
+    # fuzzier assertion for no gain. The gradient has its own case at the end.
     options = dict(
-        brightness=255, active_ratio=0.5, screen_dark=False,
+        palette=[], brightness=255, active_ratio=0.5, screen_dark=False,
         display_on=True, lights_on=True, rgb_on=True,
     )
     options.update(flags)
@@ -88,7 +93,12 @@ def main() -> int:
         time.sleep(1.0)
         failures = []
         for index, zone, group, colours in _observed(reader, plan):
-            want = (0, 0, 0) if expect_black else (near if group == "near" else far)
+            base = (0, 0, 0) if expect_black else (near if group == "near" else far)
+            # The LEDs are deliberately NOT sent the published colour: the sink
+            # applies the configured saturation and gamma, because a bulb and a
+            # strip showing identical numbers do not look alike. Expect what the
+            # sink will actually write, or this fails on every mid-tone.
+            want = treat(base, saturation=config.saturation, gamma=config.gamma)
             if colours != [tuple(want)]:
                 failures.append(f"dev{index} {zone or 'whole'}: {colours} != [{tuple(want)}]")
         for index, colour in statics.items():
@@ -114,6 +124,27 @@ def main() -> int:
     results.append(stale_ok)
 
     check("and recovers again after staleness", (0, 255, 255), (255, 255, 0))
+
+    # And the one case that needs a palette: a strip must show a gradient, not
+    # one averaged tone. This is the seam that was silently disconnected once --
+    # every layer correct, nothing joining them.
+    publisher = AmbiencePublisher(config.socket_path)
+    _publish(
+        publisher, (255, 0, 0), (0, 0, 255),
+        palette=[((255, 0, 0), 0.4), ((0, 0, 255), 0.35), ((0, 255, 0), 0.25)],
+    )
+    publisher.close()
+    time.sleep(1.0)
+    widest = 0
+    for index, zone, _group in plan:
+        colours = reader.zone_colours(index).get(zone) if zone else reader.colours(index)
+        widest = max(widest, len(colours or []))
+    spread_ok = widest > 3 or config.spread_bias >= 1.0
+    print(
+        f"  [{'PASS' if spread_ok else 'FAIL'}] a palette reaches the LEDs as a gradient"
+        f"  (widest zone: {widest} distinct colours)"
+    )
+    results.append(spread_ok)
 
     reader.close()
     print(f"\n{sum(results)}/{len(results)} passed")

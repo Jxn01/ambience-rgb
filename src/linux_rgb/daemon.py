@@ -40,7 +40,11 @@ RECEIVE_TIMEOUT_SECONDS = 0.5
 STALE_AFTER_SECONDS = 3.0
 
 # The publisher's payload version this daemon understands.
-SUPPORTED_PAYLOAD_VERSION = 1
+SUPPORTED_PAYLOAD_VERSION = 2
+
+# v1 had no palette. It is still accepted: an older publisher simply means flat
+# colours, which is exactly what this did before the palette existed.
+MINIMUM_PAYLOAD_VERSION = 1
 
 
 def _colour(value) -> tuple[int, int, int] | None:
@@ -110,13 +114,18 @@ class Daemon:
         if not isinstance(payload, dict):
             return None
         version = payload.get("v")
-        if version != SUPPORTED_PAYLOAD_VERSION and not self._warned_version:
-            self._warned_version = True
-            self._logger.warning(
-                "Frame version %r, expected %d -- matterlights and linux-rgb are out of step",
-                version,
-                SUPPORTED_PAYLOAD_VERSION,
-            )
+        if not isinstance(version, int) or not (
+            MINIMUM_PAYLOAD_VERSION <= version <= SUPPORTED_PAYLOAD_VERSION
+        ):
+            if not self._warned_version:
+                self._warned_version = True
+                self._logger.warning(
+                    "Frame version %r, expected %d..%d -- matterlights and linux-rgb "
+                    "are out of step",
+                    version,
+                    MINIMUM_PAYLOAD_VERSION,
+                    SUPPORTED_PAYLOAD_VERSION,
+                )
         return payload
 
     # -- decision ----------------------------------------------------------
@@ -148,6 +157,32 @@ class Daemon:
         if near is None or far is None:
             return BLACK, BLACK
         return near, far
+
+    @staticmethod
+    def palette_for(payload: dict | None, *, stale: bool) -> list[tuple[tuple, float]]:
+        """The frame's palette, or empty when there is nothing to show.
+
+        Empty is always safe: :func:`linux_rgb.render.spread` falls back to the
+        group's single colour, which is exactly the behaviour that existed before
+        payload v2. So a v1 publisher, a black frame and a malformed palette all
+        degrade to the same well-tested path rather than to a special case.
+        """
+
+        if payload is None or stale:
+            return []
+        entries = payload.get("palette")
+        if not isinstance(entries, list):
+            return []
+        out = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            colour = _colour(entry.get("rgb"))
+            weight = entry.get("weight")
+            if colour is None or not isinstance(weight, (int, float)) or weight <= 0:
+                continue
+            out.append((colour, float(weight)))
+        return out
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -185,13 +220,16 @@ class Daemon:
 
             stale = (time.monotonic() - self._last_frame_at) > STALE_AFTER_SECONDS
             near, far = self.colours_for(latest, stale=stale)
+            # Black means black: never let a gradient repaint a frame that the
+            # policy above decided should be dark.
+            palette = [] if near == BLACK and far == BLACK else self.palette_for(latest, stale=stale)
 
             if self._last_colours != (near, far):
                 self._logger.debug("near=%s far=%s stale=%s", near, far, stale)
                 self._last_colours = (near, far)
 
             for sink in self._sinks:
-                sink.write(near, far)
+                sink.write(near, far, palette)
 
     def _shutdown(self) -> None:
         for sink in self._sinks:

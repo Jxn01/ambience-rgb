@@ -27,6 +27,7 @@ from linux_rgb.config import (
     DeviceRule,
 )
 from linux_rgb.openrgb_client import OpenRGBClient, OpenRGBError
+from linux_rgb.render import spread
 
 LOGGER = logging.getLogger("linux_rgb.sinks")
 
@@ -104,7 +105,7 @@ def released_on_failure(sink) -> Iterator[None]:
 class Sink(Protocol):
     name: str
 
-    def write(self, near: RGB, far: RGB) -> None: ...
+    def write(self, near: RGB, far: RGB, palette: list | None = None) -> None: ...
     def black(self) -> None: ...
     def release(self) -> None: ...
     def close(self) -> None: ...
@@ -145,8 +146,8 @@ class ResilientSink:
             self._failed_at = None
         return True
 
-    def write(self, near: RGB, far: RGB) -> bool:
-        return self._guard("write", lambda: self._sink.write(near, far))
+    def write(self, near: RGB, far: RGB, palette: list | None = None) -> bool:
+        return self._guard("write", lambda: self._sink.write(near, far, palette))
 
     def black(self) -> bool:
         return self._guard("black", self._sink.black)
@@ -294,10 +295,15 @@ class OpenRGBSink:
             else self._config.usb_interval_seconds
         )
 
-    def write(self, near: RGB, far: RGB) -> None:
+    @property
+    def _treatment(self) -> dict:
+        return {"saturation": self._config.saturation, "gamma": self._config.gamma}
+
+    def write(self, near: RGB, far: RGB, palette: list | None = None) -> None:
         if self._client is None:
             self.connect()
         assert self._client is not None
+        palette = palette or []
         now = time.monotonic()
         self._check_health(now)
         with released_on_failure(self):
@@ -308,10 +314,15 @@ class OpenRGBSink:
                 if now - last < self._interval(bus):
                     continue
                 key = (device, segments[0][0] if per_zone else None)
-                if not self._should_send(key, (near, far), now):
+                # The palette is part of what gets written, so it is part of
+                # what "unchanged" means. Leaving it out of the signature would
+                # freeze the gradient the moment near and far happened to hold
+                # still.
+                signature = (near, far, *(colour for colour, _weight in palette))
+                if not self._should_send(key, signature, now):
                     continue
-                self._send_colours(device, segments, per_zone, near, far)
-                self._sent[key] = ((near, far), time.monotonic())
+                self._send_colours(device, segments, per_zone, near, far, palette)
+                self._sent[key] = (signature, time.monotonic())
         for bus in {target[2] for target in self._targets}:
             if now - self._last_write.get(bus, 0.0) >= self._interval(bus):
                 self._last_write[bus] = now
@@ -385,20 +396,27 @@ class OpenRGBSink:
         )
 
     def _send_colours(
-        self, device: int, segments: tuple, per_zone: bool, near: RGB, far: RGB
+        self, device: int, segments: tuple, per_zone: bool, near: RGB, far: RGB,
+        palette: list | None = None,
     ) -> None:
         """Put this target's colours on the wire, in as few packets as possible."""
 
         assert self._client is not None
+        palette = palette or []
+        bias = self._config.spread_bias
+        treatment = self._treatment
         if per_zone:
             for zone_index, group, count in segments:
+                base = near if group == GROUP_NEAR else far
                 self._client.update_zone_leds(
-                    device, zone_index, [near if group == GROUP_NEAR else far] * count
+                    device, zone_index,
+                    spread(palette, base, count, bias=bias, treatment=treatment),
                 )
             return
         colours: list[RGB] = []
         for group, count in segments:
-            colours.extend([near if group == GROUP_NEAR else far] * count)
+            base = near if group == GROUP_NEAR else far
+            colours.extend(spread(palette, base, count, bias=bias, treatment=treatment))
         self._client.update_leds(device, colours)
 
     def black(self) -> None:
@@ -432,24 +450,41 @@ class CommanderCoreSink:
 
     name = "commander-core"
 
-    def __init__(self, commander: CommanderConfig, logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        commander: CommanderConfig,
+        logger: logging.Logger | None = None,
+        bias: float = 1.0,
+        treatment: dict | None = None,
+    ) -> None:
         self._config = commander
         self._logger = logger or LOGGER
         self._device = None
+        self._bias = bias
+        self._treatment = treatment or {}
 
     def connect(self) -> None:
         from linux_rgb.commander_core import CommanderCore
 
         self._device = CommanderCore(logger=self._logger).open()
 
-    def write(self, near: RGB, far: RGB) -> None:
+    def write(self, near: RGB, far: RGB, palette: list | None = None) -> None:
         if self._device is None:
             self.connect()
         assert self._device is not None
+        palette = palette or []
         pump = near if self._config.pump_group == GROUP_NEAR else far
         fans = near if self._config.fan_group == GROUP_NEAR else far
+        bias, treatment = self._bias, self._treatment
+        # The pump ring is 29 LEDs and each fan is 8: enough to show a gradient
+        # rather than a single tone, which is the whole point of the palette.
+        pump_leds = spread(palette, pump, self._device.pump_leds, bias=bias, treatment=treatment)
+        port_leds = [
+            spread(palette, fans, count, bias=bias, treatment=treatment)
+            for count in self._device.port_leds
+        ]
         with released_on_failure(self):
-            self._device.set_colour(pump, fans)
+            self._device.set_direct(pump_leds, port_leds)
 
     def black(self) -> None:
         if self._device is None:
@@ -481,7 +516,12 @@ def build_sinks(config: Config, logger: logging.Logger | None = None) -> list[Re
         # COMMANDER_RETRY_SECONDS.
         sinks.append(
             ResilientSink(
-                CommanderCoreSink(config.commander, log), log, COMMANDER_RETRY_SECONDS
+                CommanderCoreSink(
+                    config.commander, log, config.spread_bias,
+                    {"saturation": config.saturation, "gamma": config.gamma},
+                ),
+                log,
+                COMMANDER_RETRY_SECONDS,
             )
         )
     return sinks

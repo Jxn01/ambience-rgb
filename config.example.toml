@@ -21,6 +21,38 @@ port = 6742
 usb_hz = 10.0
 smbus_hz = 1.0
 
+[colour]
+# 🚨 These deliberately make the LEDs DIFFER from the bulbs in the numbers, so
+# that they match to the eye.
+#
+# A bulb is a diffuse area source across a room; an LED is a point source at full
+# output a metre from your face. Identical chromaticity, very different
+# perception: a 6%-saturated pale green reads as tinted on a lamp and as plain
+# white on a strip. MatterLights already applies COLOR_BOOST to the bulbs; this
+# is a second helping for the harsher medium.
+#
+# saturation  push each channel away from the mean of the three. 1.0 = off.
+# gamma       spread the channels apart. Raises saturation and darkens anything
+#             below full -- but NOT a colour already at peak, since 1**g == 1.
+saturation = 1.35
+gamma = 1.2
+
+[spread]
+# How hard each LED is pulled back to its group's single colour.
+#
+#   1.0  every LED in a group shows one colour -- the original behaviour
+#   0.0  the raw palette gradient, ignoring near/far entirely
+#
+# The engine clusters each frame into a weighted palette of up to four colours
+# and then collapses it, because six bulbs cannot show more. This rig has a
+# 97-LED motherboard header and three 8-LED fan rings; a middling bias puts the
+# palette back as a gradient while keeping the near/far split, which is a real
+# choice about which hardware lights the screen and which lights the room.
+#
+# Needs a publisher sending a palette (matterlights payload v2 or later). With
+# an older one this silently does nothing, which is the correct fallback.
+bias = 0.35
+
 [commander]
 # The Corsair Commander Core, driven by our own hidraw driver because neither
 # OpenRGB nor liquidctl can. Both the pump ring and the fans read as "far":

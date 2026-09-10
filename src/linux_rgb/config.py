@@ -85,6 +85,25 @@ class Config:
     openrgb_port: int = 6742
     usb_interval_seconds: float = 0.2
     smbus_interval_seconds: float = 1.0
+    saturation: float = 1.0
+    """Push colours away from grey before writing them. 1.0 disables it.
+
+    An LED is a point source at full output; a bulb is a diffuse area source in a
+    room. Identical chromaticity, very different perception -- pale shades that
+    read as tinted on a lamp read as plain white on a strip. This is the knob for
+    that, and it deliberately makes the two DIFFER in the numbers so they match
+    to the eye.
+    """
+    gamma: float = 1.0
+    """Spread the channels apart. 1.0 disables it. See render.treat -- note it
+    does not dim a colour already at peak."""
+    spread_bias: float = 1.0
+    """How hard each LED is pulled back to its group's single colour.
+
+    1.0 is the original flat behaviour and the safe default; 0.0 is the raw
+    palette gradient. Anything below 1.0 needs a publisher sending a palette
+    (matterlights payload v2 or later).
+    """
     devices: tuple[DeviceRule, ...] = ()
     commander: CommanderConfig = field(default_factory=CommanderConfig)
 
@@ -93,6 +112,20 @@ class Config:
             if rule.matches(controller_name):
                 return rule
         return None
+
+
+def _positive(value, where: str) -> float:
+    number = float(value)
+    if number <= 0:
+        raise ValueError(f"{where} must be greater than 0, got {value!r}")
+    return number
+
+
+def _fraction(value, where: str) -> float:
+    number = float(value)
+    if not 0.0 <= number <= 1.0:
+        raise ValueError(f"{where} must be between 0 and 1, got {value!r}")
+    return number
 
 
 def _validate_static(value, where: str) -> tuple[int, int, int] | None:
@@ -206,6 +239,8 @@ def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
             )
         )
 
+    colour = payload.get("colour") or {}
+    spread_section = payload.get("spread") or {}
     commander_section = payload.get("commander") or {}
     commander = CommanderConfig(
         enabled=bool(commander_section.get("enabled", True)),
@@ -219,6 +254,9 @@ def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
         openrgb_port=int(openrgb.get("port", 6742)),
         usb_interval_seconds=interval("usb_hz", 5.0),
         smbus_interval_seconds=interval("smbus_hz", 1.0),
+        saturation=_positive(colour.get("saturation", 1.0), "colour.saturation"),
+        gamma=_positive(colour.get("gamma", 1.0), "colour.gamma"),
+        spread_bias=_fraction(spread_section.get("bias", 1.0), "spread.bias"),
         devices=tuple(rules),
         commander=commander,
     )

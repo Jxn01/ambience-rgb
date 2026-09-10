@@ -86,10 +86,13 @@ class _Sink:
         self.blacks = 0
         self.closed = False
 
-    def write(self, near, far) -> None:
+    def write(self, near, far, palette=None) -> None:
         if self.fail:
             raise RuntimeError("device fell off the bus")
         self.writes.append((near, far))
+
+    def release(self) -> None:
+        self.released = True
 
     def black(self) -> None:
         if self.fail:

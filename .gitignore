@@ -3,3 +3,10 @@ __pycache__/
 .venv/
 *.egg-info/
 .pytest_cache/
+
+# A credential store must never become tracked. `.env` alone is an exact
+# filename match and misses every derivative -- see tests/test_repo_hygiene.py.
+.env
+.env.*
+!.env.example
+config.toml

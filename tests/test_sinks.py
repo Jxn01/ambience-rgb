@@ -11,9 +11,9 @@ from __future__ import annotations
 import logging
 import unittest
 
-from linux_rgb.config import parse_config
-from linux_rgb.openrgb_client import OpenRGBError
-from linux_rgb.sinks import (
+from ambience_rgb.config import parse_config
+from ambience_rgb.openrgb_client import OpenRGBError
+from ambience_rgb.sinks import (
     COLOUR_EPSILON,
     HEALTH_CHECK_SECONDS,
     HEALTH_FAILURES_BEFORE_RECONNECT,
@@ -290,7 +290,7 @@ class HealthCheckTest(unittest.TestCase):
         self.assertEqual(sink._health_failures, 0)
 
     def test_the_resilient_wrapper_absorbs_that_and_retries(self) -> None:
-        from linux_rgb.sinks import ResilientSink
+        from ambience_rgb.sinks import ResilientSink
 
         client = _FakeClient(answers=False)
         sink = self._sink_with(client)
@@ -449,7 +449,7 @@ class ReleaseOnFailureTest(unittest.TestCase):
             self.closed += 1
 
     def test_it_closes_on_failure_and_re_raises(self) -> None:
-        from linux_rgb.sinks import released_on_failure
+        from ambience_rgb.sinks import released_on_failure
 
         sink = self._Sink()
         with self.assertRaises(ValueError):
@@ -459,7 +459,7 @@ class ReleaseOnFailureTest(unittest.TestCase):
         self.assertEqual(sink.closed, 0, "🚨 close() writes black; a failure must not")
 
     def test_it_does_nothing_on_success(self) -> None:
-        from linux_rgb.sinks import released_on_failure
+        from ambience_rgb.sinks import released_on_failure
 
         sink = self._Sink()
         with released_on_failure(sink):
@@ -468,7 +468,7 @@ class ReleaseOnFailureTest(unittest.TestCase):
         self.assertEqual(sink.closed, 0)
 
     def test_a_failing_close_does_not_mask_the_real_error(self) -> None:
-        from linux_rgb.sinks import released_on_failure
+        from ambience_rgb.sinks import released_on_failure
 
         class Exploding(self._Sink):
             def release(self) -> None:
@@ -479,8 +479,8 @@ class ReleaseOnFailureTest(unittest.TestCase):
                 raise ValueError("the real problem")
 
     def test_the_commander_sink_drops_its_device(self) -> None:
-        from linux_rgb.config import parse_config
-        from linux_rgb.sinks import CommanderCoreSink
+        from ambience_rgb.config import parse_config
+        from ambience_rgb.sinks import CommanderCoreSink
 
         class Dead:
             blacked = 0
@@ -510,8 +510,8 @@ class ReleaseOnFailureTest(unittest.TestCase):
         self.assertIsNone(sink._device, "an unplugged AIO must be reopened, not reused")
 
     def test_the_commander_sink_drops_it_on_black_too(self) -> None:
-        from linux_rgb.config import parse_config
-        from linux_rgb.sinks import CommanderCoreSink
+        from ambience_rgb.config import parse_config
+        from ambience_rgb.sinks import CommanderCoreSink
 
         class Dead:
             def black(self):
@@ -563,8 +563,8 @@ class CommanderWritesEveryTickTest(unittest.TestCase):
             pass
 
     def _sink(self):
-        from linux_rgb.config import parse_config
-        from linux_rgb.sinks import CommanderCoreSink
+        from ambience_rgb.config import parse_config
+        from ambience_rgb.sinks import CommanderCoreSink
 
         sink = CommanderCoreSink(parse_config({"socket": {"path": "/tmp/x.sock"}}).commander)
         device = self._Device()
@@ -728,7 +728,7 @@ class WedgeEscalationTest(unittest.TestCase):
     def test_a_few_reconnects_do_not_trigger_a_restart(self) -> None:
         """A dropped connection is normal; it must not restart a service."""
 
-        import linux_rgb.sinks as module
+        import ambience_rgb.sinks as module
 
         calls = []
         sink = self._sink(("true",))
@@ -771,7 +771,7 @@ class WedgeEscalationTest(unittest.TestCase):
         device, including ones held at a static colour."""
 
         import subprocess
-        from linux_rgb.sinks import RESTART_COOLDOWN_SECONDS
+        from ambience_rgb.sinks import RESTART_COOLDOWN_SECONDS
 
         seen = []
         real_run = subprocess.run
@@ -787,7 +787,7 @@ class WedgeEscalationTest(unittest.TestCase):
         self.assertEqual(len(seen), 1, "the second burst is inside the cooldown")
 
     def test_old_reconnects_fall_out_of_the_window(self) -> None:
-        from linux_rgb.sinks import WEDGE_WINDOW_SECONDS
+        from ambience_rgb.sinks import WEDGE_WINDOW_SECONDS
 
         sink = self._sink()
         sink._note_reconnect(1.0)

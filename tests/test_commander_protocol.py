@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import unittest
 
-from linux_rgb.commander_protocol import (
+from ambience_rgb.commander_protocol import (
     CMD_CLOSE_ENDPOINT,
     CMD_OPEN_ENDPOINT,
     CMD_WRITE,

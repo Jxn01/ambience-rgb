@@ -11,7 +11,7 @@ import os
 import unittest
 from pathlib import Path
 
-from linux_rgb.config import (
+from ambience_rgb.config import (
     GROUP_EXCLUDED,
     GROUP_FAR,
     GROUP_NEAR,

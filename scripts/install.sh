@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Install linux-rgb on this machine.
+# Install ambience-rgb on this machine.
 #
 # Idempotent: safe to re-run after pulling. Everything it changes outside the
 # repo is backed up first and listed at the end.
@@ -27,7 +27,7 @@ die()  { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 # whose site-packages has no hid, so the venv comes up looking fine and dies on
 # the first Commander Core write.
 # --------------------------------------------------------------------------
-SYSTEM_PYTHON="${LINUX_RGB_PYTHON:-/usr/bin/python3}"
+SYSTEM_PYTHON="${AMBIENCE_RGB_PYTHON:-/usr/bin/python3}"
 [[ -x "$SYSTEM_PYTHON" ]] || die "No system Python at $SYSTEM_PYTHON"
 
 if [[ "$("$SYSTEM_PYTHON" -c 'import sys; print(sys.prefix)')" == *conda* ]]; then
@@ -52,7 +52,7 @@ if [[ ! -d "$VENV" ]]; then
 fi
 "$VENV/bin/python" -m pip install --quiet --upgrade pip
 "$VENV/bin/python" -m pip install --quiet -e "$REPO_ROOT"
-bold "Installed linux-rgb into the venv"
+bold "Installed ambience-rgb into the venv"
 
 # --------------------------------------------------------------------------
 # 3. Hand the Commander Core to us, not to OpenRGB
@@ -96,14 +96,14 @@ install_unit() {   # $1 = unit, $2 = dest dir, $3 = "sudo" or empty
     echo "  installed $dst"
 }
 
-install_unit linux-rgb-openrgb.service "$USER_UNIT_DIR"
-install_unit linux-rgb.service         "$USER_UNIT_DIR"
+install_unit ambience-rgb-openrgb.service "$USER_UNIT_DIR"
+install_unit ambience-rgb.service         "$USER_UNIT_DIR"
 systemctl --user daemon-reload
-systemctl --user enable --now linux-rgb-openrgb.service linux-rgb.service
+systemctl --user enable --now ambience-rgb-openrgb.service ambience-rgb.service
 
-install_unit linux-rgb-lights-off.service "$SYSTEM_UNIT_DIR" sudo
+install_unit ambience-rgb-lights-off.service "$SYSTEM_UNIT_DIR" sudo
 sudo systemctl daemon-reload
-sudo systemctl enable --now linux-rgb-lights-off.service
+sudo systemctl enable --now ambience-rgb-lights-off.service
 echo "  (it does nothing at boot; the work is in ExecStop)"
 
 # --------------------------------------------------------------------------
@@ -115,12 +115,12 @@ cat <<EOF
 
       RGB_EXTENSION_ENABLED=true
       RGB_PUBLISH_SOCKET=$(
-          "$VENV/bin/python" -c "from linux_rgb.config import load_config; print(load_config().socket_path)"
+          "$VENV/bin/python" -c "from ambience_rgb.config import load_config; print(load_config().socket_path)"
       )
 
   then: systemctl --user restart matterlights-sync
 
-  What is driven:  $VENV/bin/python -m linux_rgb devices
-  Logs:            journalctl --user -u linux-rgb -f
-  Off right now:   systemctl --user stop linux-rgb
+  What is driven:  $VENV/bin/python -m ambience_rgb devices
+  Logs:            journalctl --user -u ambience-rgb -f
+  Off right now:   systemctl --user stop ambience-rgb
 EOF

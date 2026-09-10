@@ -1,6 +1,6 @@
 """Read back more of an OpenRGB controller record than the client bothers with.
 
-``linux_rgb.openrgb_client`` parses only what it needs to drive hardware: zones,
+``ambience_rgb.openrgb_client`` parses only what it needs to drive hardware: zones,
 LED counts, and each mode's raw bytes. These checks need the rest -- the active
 mode and the current colours -- so the walk lives here rather than bloating the
 client with fields nothing in production reads.
@@ -25,7 +25,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from linux_rgb.openrgb_client import (  # noqa: E402
+from ambience_rgb.openrgb_client import (  # noqa: E402
     CMD_REQUEST_CONTROLLER_DATA,
     OpenRGBClient,
 )

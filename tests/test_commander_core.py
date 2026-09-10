@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import unittest
 
-from linux_rgb.commander_core import CommanderCore, CommanderCoreError
-from linux_rgb.commander_protocol import DATA_TYPE_LED_COUNT, PORT_SLOTS, REPORT_LENGTH
+from ambience_rgb.commander_core import CommanderCore, CommanderCoreError
+from ambience_rgb.commander_protocol import DATA_TYPE_LED_COUNT, PORT_SLOTS, REPORT_LENGTH
 
 
 def reassemble_colour_payload(written: list[bytes]) -> bytes:
@@ -159,7 +159,7 @@ class TransportTest(unittest.TestCase):
 
     def test_missing_device_explains_the_usual_cause(self) -> None:
         cc = CommanderCore(path=None)
-        import linux_rgb.commander_core as module
+        import ambience_rgb.commander_core as module
 
         original = module.find_device_path
         module.find_device_path = lambda: None
@@ -295,7 +295,7 @@ if __name__ == "__main__":  # pragma: no cover
 class ReadOnlyInspectionTest(unittest.TestCase):
     """⚠️ A diagnostic must not mutate the thing it inspects.
 
-    Exactly one process may hold this device. ``linux-rgb devices`` opening it
+    Exactly one process may hold this device. ``ambience-rgb devices`` opening it
     normally forces fan mode on the way in and writes black on the way out --
     which, with the daemon driving, fought it over the single handle and
     surfaced as ``Reply 0x01 does not acknowledge command 0x07``. Observed for
@@ -330,7 +330,7 @@ class DaemonDetectionTest(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from linux_rgb.__main__ import daemon_is_listening
+        from ambience_rgb.__main__ import daemon_is_listening
 
         with tempfile.TemporaryDirectory() as directory:
             self.assertFalse(daemon_is_listening(Path(directory) / "absent.sock"))
@@ -340,7 +340,7 @@ class DaemonDetectionTest(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from linux_rgb.__main__ import daemon_is_listening
+        from ambience_rgb.__main__ import daemon_is_listening
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "live.sock"
@@ -358,7 +358,7 @@ class DaemonDetectionTest(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from linux_rgb.__main__ import daemon_is_listening
+        from ambience_rgb.__main__ import daemon_is_listening
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "stale.sock"
@@ -440,7 +440,7 @@ class ReadTimeoutBudgetTest(unittest.TestCase):
     """
 
     def test_the_timeout_is_generous_but_not_a_stall(self) -> None:
-        from linux_rgb.commander_core import _READ_TIMEOUT_MS
+        from ambience_rgb.commander_core import _READ_TIMEOUT_MS
 
         self.assertGreaterEqual(_READ_TIMEOUT_MS, 100, "must clear the 49 ms worst case")
         self.assertLessEqual(
@@ -450,7 +450,7 @@ class ReadTimeoutBudgetTest(unittest.TestCase):
     def test_a_whole_frame_of_failures_stays_under_a_second(self) -> None:
         """Three attempts x ten packets must not add up to a visible stall."""
 
-        from linux_rgb.commander_core import _READ_TIMEOUT_MS
+        from ambience_rgb.commander_core import _READ_TIMEOUT_MS
 
         worst_case_seconds = 3 * _READ_TIMEOUT_MS / 1000
         self.assertLess(worst_case_seconds, 1.0)

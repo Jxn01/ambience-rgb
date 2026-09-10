@@ -12,7 +12,7 @@ import socket
 import struct
 import unittest
 
-from linux_rgb.openrgb_client import (
+from ambience_rgb.openrgb_client import (
     CMD_REQUEST_PROTOCOL_VERSION,
     CMD_SET_CUSTOM_MODE,
     CMD_UPDATE_MODE,

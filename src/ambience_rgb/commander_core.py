@@ -1,6 +1,6 @@
 """HID transport for the Corsair Commander Core.
 
-Everything about the wire format lives in :mod:`linux_rgb.commander_protocol`;
+Everything about the wire format lives in :mod:`ambience_rgb.commander_protocol`;
 this module only moves those bytes over ``/dev/hidraw*`` and holds the device
 state that a real connection needs.
 
@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import Sequence
 
-from linux_rgb.commander_protocol import (
+from ambience_rgb.commander_protocol import (
     CMD_CLOSE_ENDPOINT,
     CMD_OPEN_ENDPOINT,
     CMD_READ_FINAL,
@@ -49,7 +49,7 @@ from linux_rgb.commander_protocol import (
     parse_led_counts,
 )
 
-LOGGER = logging.getLogger("linux_rgb.commander_core")
+LOGGER = logging.getLogger("ambience_rgb.commander_core")
 
 VENDOR_ID = 0x1B1C
 PRODUCT_ID = 0x0C32
@@ -177,7 +177,7 @@ class CommanderCore:
     def close(self) -> None:
         """Release the device, blacking it first unless this is a read-only open.
 
-        ⚠️ A read-only open must not black on the way out. ``linux-rgb devices``
+        ⚠️ A read-only open must not black on the way out. ``ambience-rgb devices``
         is a diagnostic, and a diagnostic that turns the AIO off -- and forces
         fan mode on the way in -- is worse than useless when the daemon is
         driving it: it fights the daemon over the one handle this device allows

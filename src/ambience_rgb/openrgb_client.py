@@ -29,7 +29,7 @@ import socket
 import struct
 import time
 
-LOGGER = logging.getLogger("linux_rgb.openrgb")
+LOGGER = logging.getLogger("ambience_rgb.openrgb")
 
 MAGIC = b"ORGB"
 DEFAULT_HOST = "127.0.0.1"
@@ -188,7 +188,7 @@ class OpenRGBClient:
         self,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
-        name: str = "linux-rgb",
+        name: str = "ambience-rgb",
         timeout: float = 5.0,
         logger: logging.Logger | None = None,
     ) -> None:

@@ -54,13 +54,13 @@ od -An -tx1 /sys/class/hidraw/hidraw20/device/report_descriptor
 #  75 08 96 40 00  ->  Report Size 8 bits x Report Count 0x0040 = 64 bytes
 ```
 
-Compare with `REPORT_LENGTH` in `src/linux_rgb/commander_protocol.py`. Ask the
+Compare with `REPORT_LENGTH` in `src/ambience_rgb/commander_protocol.py`. Ask the
 device what shape it expects before auditing your implementation of the shape you
 assumed.
 
 ## Notes
 
-- `check_failures.py` restarts `linux-rgb-openrgb`, SIGKILLs `linux-rgb` and
+- `check_failures.py` restarts `ambience-rgb-openrgb`, SIGKILLs `ambience-rgb` and
   stops it. It puts everything back, but do not run it while you care about the
   lights holding steady.
 - `check_policy.py` and `check_soak.py` publish frames themselves. If matterlights

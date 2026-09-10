@@ -1,4 +1,4 @@
-# linux-rgb — design
+# ambience-rgb — design
 
 **Status:** approved 2026-09-09. Implemented in the same session.
 
@@ -28,7 +28,7 @@ matterlights already captures the screen and renders an ambience palette five
 times a second. Running a second capture would double the PipeWire load and let
 the bulbs and the case disagree during a scene change.
 
-So **matterlights publishes and linux-rgb subscribes**. matterlights gains one
+So **matterlights publishes and ambience-rgb subscribes**. matterlights gains one
 small, config-gated, fire-and-forget publisher; everything else lives here.
 
 ```
@@ -36,7 +36,7 @@ matterlights-sync
   capture -> ambience -> Matter bulbs
                       -> unix datagram socket ---.
                                                   |
-linux-rgb                                         |
+ambience-rgb                                         |
   subscribe  <------------------------------------'
   map near/far -> OpenRGBSink      -> DRAM x2, GPU, Razer, AW3225QF, ASRock
                -> CommanderCoreSink -> pump 29 + fans 3x8   (our own driver)
@@ -58,7 +58,7 @@ One JSON object per datagram, UTF-8, on a `SOCK_DGRAM` unix socket.
 | `lights_on` | bool | Dashboard master switch. |
 | `rgb_on` | bool | Dashboard RGB switch (this project's own toggle). |
 
-**linux-rgb consumes decisions, never re-derives them.** `screen_dark` and
+**ambience-rgb consumes decisions, never re-derives them.** `screen_dark` and
 `lights_on` are matterlights' calls; mirroring the bulbs means obeying those
 flags, not recomputing darkness from the palette. Only `rgb_on` is ours.
 
@@ -188,7 +188,7 @@ Every one runs in a `finally`, so a crash still blacks the devices.
 
 ## Configuration
 
-`~/.config/linux-rgb/config.toml`, with a documented example in the repo. Device
+`~/.config/ambience-rgb/config.toml`, with a documented example in the repo. Device
 mapping, socket path, per-bus rate limits and the excluded-device list all live
 there. Nothing about this rig is hard-coded in the source.
 

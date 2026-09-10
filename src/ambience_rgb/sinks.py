@@ -18,7 +18,7 @@ import time
 from contextlib import contextmanager
 from typing import Iterator, Protocol
 
-from linux_rgb.config import (
+from ambience_rgb.config import (
     BUS_SMBUS,
     GROUP_EXCLUDED,
     GROUP_NEAR,
@@ -26,10 +26,10 @@ from linux_rgb.config import (
     Config,
     DeviceRule,
 )
-from linux_rgb.openrgb_client import OpenRGBClient, OpenRGBError
-from linux_rgb.render import apply_channel_order, spread
+from ambience_rgb.openrgb_client import OpenRGBClient, OpenRGBError
+from ambience_rgb.render import apply_channel_order, spread
 
-LOGGER = logging.getLogger("linux_rgb.sinks")
+LOGGER = logging.getLogger("ambience_rgb.sinks")
 
 RGB = tuple[int, int, int]
 
@@ -402,7 +402,7 @@ class OpenRGBSink:
         if not command:
             self._logger.error(
                 "openrgb: %d reconnects in %.0fs and still not healthy -- the server is "
-                "wedged. Restart it: systemctl --user restart linux-rgb-openrgb "
+                "wedged. Restart it: systemctl --user restart ambience-rgb-openrgb "
                 "(or set openrgb.restart_command to do it automatically)",
                 len(self._reconnects),
                 WEDGE_WINDOW_SECONDS,
@@ -530,7 +530,7 @@ class CommanderCoreSink:
         self._treatment = treatment or {}
 
     def connect(self) -> None:
-        from linux_rgb.commander_core import CommanderCore
+        from ambience_rgb.commander_core import CommanderCore
 
         self._device = CommanderCore(logger=self._logger).open()
 

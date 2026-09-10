@@ -24,8 +24,8 @@ sys.path.insert(0, "/home/jxn/Projects/matterlights/src")
 from matterlights.rgb_publish import AmbiencePublisher  # noqa: E402
 
 sys.path.insert(0, str(REPO_ROOT / "src"))
-from linux_rgb.config import load_config  # noqa: E402
-from linux_rgb.openrgb_client import OpenRGBClient  # noqa: E402
+from ambience_rgb.config import load_config  # noqa: E402
+from ambience_rgb.openrgb_client import OpenRGBClient  # noqa: E402
 
 NEAR, FAR = (255, 0, 0), (0, 0, 255)
 CONFIG = load_config()
@@ -48,7 +48,7 @@ def sh(*args: str) -> None:
 
 def show(prop: str) -> str:
     return subprocess.run(
-        ["systemctl", "--user", "show", "linux-rgb", "-p", prop, "--value"],
+        ["systemctl", "--user", "show", "ambience-rgb", "-p", prop, "--value"],
         capture_output=True, text=True,
     ).stdout.strip()
 
@@ -98,7 +98,7 @@ def main() -> int:
 
     print("  ...restarting the OpenRGB server underneath it", flush=True)
     blank(0)
-    sh("systemctl", "--user", "restart", "linux-rgb-openrgb.service")
+    sh("systemctl", "--user", "restart", "ambience-rgb-openrgb.service")
     took = wait_for(0, NEAR, 120)
     report("recovers after the OpenRGB server restarts", took is not None,
            f"({took:.0f}s)" if took else "(never)")
@@ -116,7 +116,7 @@ def main() -> int:
     print("  ...stopping the daemon cleanly", flush=True)
     stop.set()
     time.sleep(1.0)
-    sh("systemctl", "--user", "stop", "linux-rgb.service")
+    sh("systemctl", "--user", "stop", "ambience-rgb.service")
     time.sleep(4)
     driven = sorted({t[0] for t in _driven_indices()})
     blacks = {i: read(i) for i in driven}
@@ -124,7 +124,7 @@ def main() -> int:
            all(v == [(0, 0, 0)] for v in blacks.values()),
            str({k: v[0] for k, v in blacks.items()}))
 
-    sh("systemctl", "--user", "start", "linux-rgb.service")
+    sh("systemctl", "--user", "start", "ambience-rgb.service")
     time.sleep(8)
     print(f"\n{sum(results)}/{len(results)} passed", flush=True)
     return 0 if all(results) else 1

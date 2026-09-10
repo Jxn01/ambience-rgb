@@ -1,4 +1,4 @@
-"""Configuration for linux-rgb.
+"""Configuration for ambience-rgb.
 
 Every fact about this particular rig -- which controller belongs to which
 group, which zones split, what is excluded, how fast each bus may be driven --
@@ -8,8 +8,8 @@ mix of hardware should mean a different config file, not a patch.
 
 Read from, in order:
 
-1. ``$LINUX_RGB_CONFIG``
-2. ``$XDG_CONFIG_HOME/linux-rgb/config.toml`` (usually ``~/.config/...``)
+1. ``$AMBIENCE_RGB_CONFIG``
+2. ``$XDG_CONFIG_HOME/ambience-rgb/config.toml`` (usually ``~/.config/...``)
 3. ``config.example.toml`` next to the repo, as a last-resort default
 
 so a checkout runs without setup while a real install can override everything.
@@ -313,11 +313,11 @@ def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
 
 def config_search_path() -> list[Path]:
     paths = []
-    override = os.getenv("LINUX_RGB_CONFIG")
+    override = os.getenv("AMBIENCE_RGB_CONFIG")
     if override:
         paths.append(Path(override).expanduser())
     xdg = os.getenv("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    paths.append(Path(xdg) / "linux-rgb" / "config.toml")
+    paths.append(Path(xdg) / "ambience-rgb" / "config.toml")
     paths.append(Path(__file__).resolve().parents[2] / "config.example.toml")
     return paths
 

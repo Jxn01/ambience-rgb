@@ -1,14 +1,14 @@
 # Execution log — 2026-09-09
 
 Built and verified in one session, against
-[the design](2026-09-09-linux-rgb-design.md). What follows is what actually
+[the design](2026-09-09-ambience-rgb-design.md). What follows is what actually
 happened, including the parts that went wrong.
 
 ## What shipped
 
 | | |
 |---|---|
-| `linux-rgb` | 140 unit tests + 4 integration checks, private repo, pushed |
+| `ambience-rgb` | 140 unit tests + 4 integration checks, private repo, pushed |
 | `matterlights` | publisher + master-off publishing + LED rendering, 227 tests, pushed |
 | LEDs driven | **207** across 7 controllers |
 | Verified live | capture → bulbs → socket → OpenRGB + AIO, on real hardware |
@@ -175,7 +175,7 @@ refresh, and `black()` deliberately bypasses the filter.
 
 ### The diagnostic that caused a fault
 
-`linux-rgb devices` opened the Commander Core, forced fan mode and wrote black on
+`ambience-rgb devices` opened the Commander Core, forced fan mode and wrote black on
 close — while the daemon held it. It produced a real
 `Reply 0x01 does not acknowledge command 0x07` in the daemon's log, from the
 debugging itself. `devices` is now read-only and skips the device entirely while
@@ -459,6 +459,6 @@ command instead of leaving the next person to rediscover it.
 
 ## Left running
 
-`linux-rgb-openrgb`, `linux-rgb` and `matterlights-sync`/`-dashboard` are
-enabled and active; `linux-rgb-lights-off` is armed. The RGB follows the screen
+`ambience-rgb-openrgb`, `ambience-rgb` and `matterlights-sync`/`-dashboard` are
+enabled and active; `ambience-rgb-lights-off` is armed. The RGB follows the screen
 while the lamps stay off, which is the state the owner left the lamps in.

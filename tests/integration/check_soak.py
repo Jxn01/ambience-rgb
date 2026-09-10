@@ -23,7 +23,7 @@ sys.path.insert(0, "/home/jxn/Projects/matterlights/src")
 from matterlights.rgb_publish import AmbiencePublisher  # noqa: E402
 
 sys.path.insert(0, str(REPO_ROOT / "src"))
-from linux_rgb.config import load_config  # noqa: E402
+from ambience_rgb.config import load_config  # noqa: E402
 
 CHECK_EVERY = 30.0
 HOLD = ((200, 30, 30), (30, 30, 200))

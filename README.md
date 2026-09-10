@@ -1,4 +1,4 @@
-# linux-rgb
+# ambience-rgb
 
 Ambient screen-to-light sync for the RGB hardware in `jxn-garuda`, driven by the
 colours [matterlights](https://github.com/Jxn01/matterlights) has already
@@ -8,7 +8,7 @@ computed for the Matter bulbs. The lamps and the case show the same thing.
 shipped configuration describes one rig, and it includes a hand-written driver
 for one AIO controller that no available tool can drive. Windows has better
 tooling for this; the design reasoning is in
-[docs/specs/2026-09-09-linux-rgb-design.md](docs/specs/2026-09-09-linux-rgb-design.md).
+[docs/specs/2026-09-09-ambience-rgb-design.md](docs/specs/2026-09-09-ambience-rgb-design.md).
 
 ---
 
@@ -19,7 +19,7 @@ matterlights-sync
   capture -> ambience -> Matter bulbs
                       -> unix datagram socket ---.
                                                   |
-linux-rgb (this)                                  |
+ambience-rgb (this)                                  |
   subscribe  <------------------------------------'
   near/far -> OpenRGBSink       -> RAM x2, GPU, mouse, monitor, motherboard
            -> CommanderCoreSink -> AIO pump + fans   (our own hidraw driver)
@@ -61,7 +61,7 @@ Then tell MatterLights to publish, in its `.env`:
 
 ```ini
 RGB_EXTENSION_ENABLED=true
-RGB_PUBLISH_SOCKET=/run/user/1000/linux-rgb.sock
+RGB_PUBLISH_SOCKET=/run/user/1000/ambience-rgb.sock
 ```
 
 and `systemctl --user restart matterlights-sync`.
@@ -70,26 +70,26 @@ and `systemctl --user restart matterlights-sync`.
 
 | Command | What it does |
 |---|---|
-| `linux-rgb run` | The daemon. What the systemd unit runs. |
-| `linux-rgb off` | Write black to everything once and exit. What the shutdown unit runs. |
-| `linux-rgb devices` | Print what would be driven, with groups, buses and LED counts. **Run this first when something looks wrong.** Read-only: it never changes device state, and skips the Commander while the daemon holds it. |
-| `linux-rgb -v …` | Debug logging, including every colour decision. |
+| `ambience-rgb run` | The daemon. What the systemd unit runs. |
+| `ambience-rgb off` | Write black to everything once and exit. What the shutdown unit runs. |
+| `ambience-rgb devices` | Print what would be driven, with groups, buses and LED counts. **Run this first when something looks wrong.** Read-only: it never changes device state, and skips the Commander while the daemon holds it. |
+| `ambience-rgb -v …` | Debug logging, including every colour decision. |
 
 ## Units
 
 | Unit | Scope | Purpose |
 |---|---|---|
-| `linux-rgb-openrgb.service` | user | The OpenRGB SDK server, bound to `127.0.0.1` |
-| `linux-rgb.service` | user | The daemon |
-| `linux-rgb-lights-off.service` | **system** | `ExecStop` writes black at shutdown |
+| `ambience-rgb-openrgb.service` | user | The OpenRGB SDK server, bound to `127.0.0.1` |
+| `ambience-rgb.service` | user | The daemon |
+| `ambience-rgb-lights-off.service` | **system** | `ExecStop` writes black at shutdown |
 
 The daemon only `Wants=` the OpenRGB server. A dead server should cost the
 motherboard and RAM, not the AIO, which needs no server at all.
 
 ## Configuration
 
-`~/.config/linux-rgb/config.toml`, falling back to `config.example.toml` in the
-repo. `$LINUX_RGB_CONFIG` overrides both.
+`~/.config/ambience-rgb/config.toml`, falling back to `config.example.toml` in the
+repo. `$AMBIENCE_RGB_CONFIG` overrides both.
 
 | Key | Meaning |
 |---|---|
@@ -125,7 +125,7 @@ Raise it a step at a time and watch fan control, not a benchmark.
 
 Measured on `jxn-garuda`, capturing 3840×2160 at `SAMPLE_STRIDE=121`:
 
-| Sync rate | matterlights | `linux-rgb` | `openrgb` |
+| Sync rate | matterlights | `ambience-rgb` | `openrgb` |
 |---|---|---|---|
 | 5 Hz | 16.3% of one core | ~0% | — |
 | 10 Hz | 32.4% | ~0% | — |
@@ -191,7 +191,7 @@ The Corsair Commander Core (`1b1c:0c32`) is driven directly over
 | OpenRGB 1.0rc3, **SDK server** | **no** — every zone reads 0 | no; `RESIZEZONE` crashes it |
 | OpenRGB git (0.9.2459) | pump only | pump only |
 | liquidctl 1.16 | yes | **no** — `set_color` is `raise NotSupportedByDriver` |
-| **linux-rgb** | yes | **yes — all 53** |
+| **ambience-rgb** | yes | **yes — all 53** |
 
 Protocol details are in `commander_protocol.py`, tested byte-for-byte because
 the lighting endpoint is **write-only**: a wrong offset produces no error, just
@@ -216,8 +216,8 @@ you how to put it back.
 
 ## Troubleshooting
 
-**Nothing lights up.** `linux-rgb devices`. If OpenRGB is unavailable, check
-`systemctl --user status linux-rgb-openrgb`. If the Commander Core is
+**Nothing lights up.** `ambience-rgb devices`. If OpenRGB is unavailable, check
+`systemctl --user status ambience-rgb-openrgb`. If the Commander Core is
 unavailable, something else is holding `/dev/hidraw20` — almost always an
 OpenRGB whose detector got re-enabled. (`devices` opens the Commander read-only,
 and skips it entirely while the daemon is running: exactly one process may hold
@@ -252,7 +252,7 @@ unread and near-zero CPU, leaking `CLOSE-WAIT` connections with large receive
 queues (`ss -tnp | grep 6742` shows them). The daemon now detects this itself —
 it times a request/reply every 5 s and drops the connection when the server does
 not answer within 2 s — but a wedged server usually needs
-`systemctl --user restart linux-rgb-openrgb`.
+`systemctl --user restart ambience-rgb-openrgb`.
 
 ⚠️ **Restarting the server resets every device to whatever it reports.** Direct
 mode does not persist, so a device nothing writes to comes back dark. That is

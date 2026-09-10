@@ -1,6 +1,6 @@
 [Unit]
-Description=OpenRGB SDK server for linux-rgb
-Documentation=https://github.com/Jxn01/linux-rgb
+Description=OpenRGB SDK server for ambience-rgb
+Documentation=https://github.com/Jxn01/ambience-rgb
 PartOf=graphical-session.target
 After=graphical-session.target
 

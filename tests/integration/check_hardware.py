@@ -23,8 +23,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from linux_rgb.commander_core import CommanderCore  # noqa: E402
-from linux_rgb.config import load_config  # noqa: E402
+from ambience_rgb.commander_core import CommanderCore  # noqa: E402
+from ambience_rgb.config import load_config  # noqa: E402
 
 HOLD_SECONDS = 6.0
 SEQUENCE = [
@@ -82,7 +82,7 @@ def main() -> int:
         "looks exactly like success from every software vantage point:\n"
         "    od -An -tx1 /sys/class/hidraw/hidraw20/device/report_descriptor\n"
         "    75 08 96 40 00  ->  Report Size 8 bits x Report Count 0x0040 = 64\n"
-        "and compare with REPORT_LENGTH in src/linux_rgb/commander_protocol.py."
+        "and compare with REPORT_LENGTH in src/ambience_rgb/commander_protocol.py."
     )
     return 1
 

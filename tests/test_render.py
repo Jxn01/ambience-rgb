@@ -5,7 +5,7 @@ from __future__ import annotations
 import colorsys
 import unittest
 
-from linux_rgb.render import apply_channel_order, blend, cohere, spread, treat
+from ambience_rgb.render import apply_channel_order, blend, cohere, spread, treat
 
 
 def saturation_of(colour):
@@ -206,14 +206,14 @@ class ChannelOrderTest(unittest.TestCase):
         self.assertEqual(displayed, wanted)
 
     def test_every_permutation_is_a_permutation(self) -> None:
-        from linux_rgb.render import CHANNEL_ORDERS
+        from ambience_rgb.render import CHANNEL_ORDERS
 
         for order in CHANNEL_ORDERS:
             out = apply_channel_order((10, 20, 30), order)
             self.assertEqual(sorted(out), [10, 20, 30], f"{order} lost or duplicated a channel")
 
     def test_black_and_white_are_unaffected_by_any_order(self) -> None:
-        from linux_rgb.render import CHANNEL_ORDERS
+        from ambience_rgb.render import CHANNEL_ORDERS
 
         for order in CHANNEL_ORDERS:
             self.assertEqual(apply_channel_order((0, 0, 0), order), (0, 0, 0))

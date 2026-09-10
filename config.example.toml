@@ -1,12 +1,12 @@
-# linux-rgb configuration for jxn-garuda.
+# ambience-rgb configuration for jxn-garuda.
 #
-# Copy to ~/.config/linux-rgb/config.toml to change anything; this file is the
+# Copy to ~/.config/ambience-rgb/config.toml to change anything; this file is the
 # fallback so a fresh checkout runs without setup.
 
 [socket]
 # Must match RGB_PUBLISH_SOCKET in matterlights' .env. $XDG_RUNTIME_DIR is the
 # right home for it: tmpfs, per-user, cleaned up at logout.
-path = "$XDG_RUNTIME_DIR/linux-rgb.sock"
+path = "$XDG_RUNTIME_DIR/ambience-rgb.sock"
 
 [openrgb]
 # 127.0.0.1 deliberately. OpenRGB's own default is 0.0.0.0, which puts control
@@ -25,7 +25,7 @@ port = 6742
 # once every five minutes. Leave it empty to only log loudly instead: restarting
 # another unit is a real side effect, and it resets every device including ones
 # held at a static colour.
-restart_command = ["systemctl", "--user", "restart", "linux-rgb-openrgb.service"]
+restart_command = ["systemctl", "--user", "restart", "ambience-rgb-openrgb.service"]
 
 [rates]
 # Per BUS, not global. USB HID devices are happy at the full sync rate; SMBus is

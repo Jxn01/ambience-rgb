@@ -23,11 +23,11 @@ import socket
 import time
 from pathlib import Path
 
-from linux_rgb.config import Config
-from linux_rgb.render import cohere
-from linux_rgb.sinks import ResilientSink, build_sinks
+from ambience_rgb.config import Config
+from ambience_rgb.render import cohere
+from ambience_rgb.sinks import ResilientSink, build_sinks
 
-LOGGER = logging.getLogger("linux_rgb.daemon")
+LOGGER = logging.getLogger("ambience_rgb.daemon")
 
 BLACK = (0, 0, 0)
 
@@ -133,7 +133,7 @@ class Daemon:
             if not self._warned_version:
                 self._warned_version = True
                 self._logger.warning(
-                    "Frame version %r, expected %d..%d -- matterlights and linux-rgb "
+                    "Frame version %r, expected %d..%d -- matterlights and ambience-rgb "
                     "are out of step",
                     version,
                     MINIMUM_PAYLOAD_VERSION,
@@ -175,7 +175,7 @@ class Daemon:
     def palette_for(payload: dict | None, *, stale: bool) -> list[tuple[tuple, float]]:
         """The frame's palette, or empty when there is nothing to show.
 
-        Empty is always safe: :func:`linux_rgb.render.spread` falls back to the
+        Empty is always safe: :func:`ambience_rgb.render.spread` falls back to the
         group's single colour, which is exactly the behaviour that existed before
         payload v2. So a v1 publisher, a black frame and a malformed palette all
         degrade to the same well-tested path rather than to a special case.

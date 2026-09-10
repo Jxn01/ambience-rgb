@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "linux-rgb"
+name = "ambience-rgb"
 version = "1.0.0"
 description = "Ambient screen-to-light sync for the RGB hardware in jxn-garuda"
 requires-python = ">=3.11"
@@ -13,7 +13,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-linux-rgb = "linux_rgb.__main__:main"
+ambience-rgb = "ambience_rgb.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 import unittest
 
-from linux_rgb.daemon import BLACK, Daemon
-from linux_rgb.sinks import RETRY_SECONDS, ResilientSink
+from ambience_rgb.daemon import BLACK, Daemon
+from ambience_rgb.sinks import RETRY_SECONDS, ResilientSink
 
 FRAME = {
     "v": 1,
@@ -164,10 +164,10 @@ class OpenRgbEmptyPlanTest(unittest.TestCase):
         self.addCleanup(logging.disable, logging.NOTSET)
 
     def test_connect_raises_so_the_wrapper_retries(self) -> None:
-        from linux_rgb.config import parse_config
-        from linux_rgb.openrgb_client import OpenRGBError
-        from linux_rgb.sinks import OpenRGBSink
-        import linux_rgb.sinks as module
+        from ambience_rgb.config import parse_config
+        from ambience_rgb.openrgb_client import OpenRGBError
+        from ambience_rgb.sinks import OpenRGBSink
+        import ambience_rgb.sinks as module
 
         class EmptyClient:
             controllers: list = []
@@ -244,7 +244,7 @@ class StaleThresholdTest(unittest.TestCase):
     """
 
     def test_it_clears_several_home_assistant_timeouts(self) -> None:
-        from linux_rgb.daemon import STALE_AFTER_SECONDS
+        from ambience_rgb.daemon import STALE_AFTER_SECONDS
 
         ha_timeout = 3.0
         self.assertGreater(
@@ -255,7 +255,7 @@ class StaleThresholdTest(unittest.TestCase):
     def test_it_still_notices_a_genuinely_dead_publisher(self) -> None:
         """Holding a frozen colour forever is the failure this guards against."""
 
-        from linux_rgb.daemon import STALE_AFTER_SECONDS
+        from ambience_rgb.daemon import STALE_AFTER_SECONDS
 
         self.assertLessEqual(STALE_AFTER_SECONDS, 15.0)
 

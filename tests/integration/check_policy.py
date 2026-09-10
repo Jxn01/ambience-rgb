@@ -23,8 +23,8 @@ sys.path.insert(0, "/home/jxn/Projects/matterlights/src")
 from matterlights.rgb_publish import AmbiencePublisher  # noqa: E402
 
 sys.path.insert(0, str(REPO_ROOT / "src"))
-from linux_rgb.config import load_config  # noqa: E402
-from linux_rgb.render import treat  # noqa: E402
+from ambience_rgb.config import load_config  # noqa: E402
+from ambience_rgb.render import treat  # noqa: E402
 
 NEAR = (255, 0, 0)
 FAR = (0, 0, 255)

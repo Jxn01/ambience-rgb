@@ -1,4 +1,4 @@
-"""Entry point: ``linux-rgb [run|off|devices]``."""
+"""Entry point: ``ambience-rgb [run|off|devices]``."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import logging
 import sys
 from pathlib import Path
 
-from linux_rgb.config import ConfigError, load_config
-from linux_rgb.daemon import Daemon, lights_off
+from ambience_rgb.config import ConfigError, load_config
+from ambience_rgb.daemon import Daemon, lights_off
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -22,7 +22,7 @@ def _configure_logging(verbose: bool) -> None:
 
 
 def daemon_is_listening(socket_path) -> bool:
-    """Whether a linux-rgb daemon is already bound to the publish socket.
+    """Whether a ambience-rgb daemon is already bound to the publish socket.
 
     Used to keep the diagnostics away from hardware the daemon is driving. A
     datagram socket file exists whether or not anyone is bound to it, so the
@@ -44,7 +44,7 @@ def daemon_is_listening(socket_path) -> bool:
 def _devices(config) -> int:
     """Print what would be driven, and how. The first thing to run when puzzled."""
 
-    from linux_rgb.openrgb_client import OpenRGBClient, OpenRGBError
+    from ambience_rgb.openrgb_client import OpenRGBClient, OpenRGBError
 
     print(f"socket: {config.socket_path}")
     print(f"openrgb: {config.openrgb_host}:{config.openrgb_port}")
@@ -75,7 +75,7 @@ def _devices(config) -> int:
         print(f"  OpenRGB unavailable: {error}")
 
     if config.commander.enabled:
-        from linux_rgb.commander_core import CommanderCore, CommanderCoreError
+        from ambience_rgb.commander_core import CommanderCore, CommanderCoreError
 
         header = (
             f"\n  Corsair Commander Core (own driver)      "
@@ -85,7 +85,7 @@ def _devices(config) -> int:
             # Exactly one process may hold this device. Opening it here would
             # interleave reads with the daemon's and desync both.
             print(header)
-            print("      held by the running daemon; not opened (stop linux-rgb to inspect)")
+            print("      held by the running daemon; not opened (stop ambience-rgb to inspect)")
             return 0
 
         try:
@@ -98,7 +98,7 @@ def _devices(config) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="linux-rgb", description=__doc__)
+    parser = argparse.ArgumentParser(prog="ambience-rgb", description=__doc__)
     parser.add_argument(
         "action",
         nargs="?",
@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config)
     except ConfigError as error:
-        logging.getLogger("linux_rgb").error("%s", error)
+        logging.getLogger("ambience_rgb").error("%s", error)
         return 2
 
     if args.action == "off":

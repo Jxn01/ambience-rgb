@@ -448,6 +448,53 @@ can fail for the reason that cost a day**, because it asks a person rather than
 asking software about software. Its failure path prints the report-descriptor
 command instead of leaving the next person to rediscover it.
 
+## 2026-09-10, afternoon: a second driver on the Commander Core
+
+After a reboot through Windows the AIO flickered between its colours and its
+firmware rainbow every 1–3 s. Nothing in ambience-rgb had changed. The previous
+boot had run 34 hours with 3 acknowledgement misses; this one logged 57 in seven
+minutes, every one `Reply 0x01 does not acknowledge command 0x0d`.
+
+**The cause was a session of ours, a day earlier.** CoolerControl has run here
+since May, only for the GPU fan curve. Its liquidctl integration defaults to on
+but had been inert for months — the previous boot logged `liquidctl system
+Python package not found`. On 2026-09-09 a research session installed liquidctl
+system-wide to read its Commander driver. CoolerControl looks for it only at
+start, so nothing happened until the next boot, when it logged `Connecting to
+LC #2 CommanderCore` and began polling.
+
+liquidctl's `_wake_device_context` sends WAKE before and SLEEP after **every**
+operation (read from the installed 1.16.0 source: four call sites). SLEEP is
+hardware mode — the rainbow — and both replies carry command byte `0x01`.
+**hidraw has no exclusive open**: `sudo fuser` showed CoolerControl's liquidctl
+helper and our daemon both holding `/dev/hidraw20`, each receiving the other's
+replies — CoolerControl was logging `response does not match command` too.
+
+| | |
+|---|---|
+| Fix | `liquidctl_integration = false` in `/etc/coolercontrol/config.toml`, daemon stopped while editing |
+| Result | our daemon the only holder; 0 misses and 0 reopens, where the old rate predicted about six in the first 40 s |
+| Cost | none — GPU fans go through NVML/nvapi, the PSU falls back to hwmon `corsairpsu`, as for the months before |
+
+Fixed as a class, not only on this machine:
+
+- **The error names the cause.** A `0x01` reply to anything but a wake/sleep is
+  another process's reply; `CommanderCore._mismatch` now says so, lists the
+  known culprits and points at `sudo fuser` — `sudo`, because an unprivileged
+  daemon cannot see a root service's handles and would report no contender.
+  Kept narrow: every other mismatch keeps the plain message. Mutation-checked.
+- **The installer checks for it.** `install.sh` warns when CoolerControl's
+  liquidctl integration is on, and distinguishes ACTIVE (liquidctl importable)
+  from ARMED (inert until liquidctl appears). Armed is how this sat for months.
+- **The binding is pinned.** `python-hidapi`, which the Commander driver
+  imports, was held by pacman only as liquidctl's dependency, so removing
+  liquidctl would have uninstalled it. The installer now marks it explicit, and
+  it was marked on this machine.
+
+The docs said "exactly one process may hold this device" and named only OpenRGB.
+Both halves were incomplete: hidraw lets any number of processes hold it — the
+rule is about *driving* it — and a second driver was waiting for a package.
+
 ## Deliberately not done
 
 - **Custom colours and patterns** drive the bulbs only; the RGB goes black in

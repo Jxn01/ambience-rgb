@@ -237,21 +237,45 @@ od -An -tx1 /sys/class/hidraw/hidraw20/device/report_descriptor
 # 75 08 96 40 00  ->  Report Size 8 bits x Report Count 0x0040 = 64 bytes
 ```
 
-⚠️ **Exactly one process may hold a HID device.** OpenRGB's detector for the
-Commander Core must stay disabled or the two fight over `/dev/hidraw20`, and the
-symptoms are silent — zones reading as size 0, colours that never apply, no
-error anywhere. `scripts/install.sh` disables it; `scripts/uninstall.sh` tells
-you how to put it back.
+⚠️ **Exactly one process may drive a HID device — and hidraw will not enforce
+it.** A second program opens `/dev/hidraw20` just as successfully as the first;
+their commands and replies simply interleave. Two contenders are known:
+
+- **OpenRGB**, whose Commander Core detector must stay disabled. Otherwise the
+  symptoms are silent — zones reading as size 0, colours that never apply, no
+  error anywhere. `scripts/install.sh` disables it; `scripts/uninstall.sh` tells
+  you how to put it back.
+- **CoolerControl**, whose liquidctl integration must be off. It is on by
+  default but inert until liquidctl is installed — then it goes live at its next
+  restart. `scripts/install.sh` warns if it is on. See *Troubleshooting*.
 
 ## Troubleshooting
 
 **Nothing lights up.** `ambience-rgb devices`. If OpenRGB is unavailable, check
 `systemctl --user status ambience-rgb-openrgb`. If the Commander Core is
-unavailable, something else is holding `/dev/hidraw20` — almost always an
-OpenRGB whose detector got re-enabled. (`devices` opens the Commander read-only,
+unavailable, something else is holding `/dev/hidraw20` — usually an OpenRGB
+whose detector got re-enabled, or CoolerControl (next entry). (`devices` opens the Commander read-only,
 and skips it entirely while the daemon is running: exactly one process may hold
 that device, and a diagnostic that fights the daemon for it produces protocol
 errors in both.)
+
+**The AIO flickers between its colours and its firmware rainbow every second or
+two.** Another program is driving the Commander Core. The journal says so
+directly — `another process is driving the Commander Core`; older builds only
+said `Reply 0x01 does not acknowledge command 0x0d`. Find it with
+`sudo fuser -v /dev/hidrawN` (the path is in the daemon's `Commander Core open
+on …` line; `sudo` matters, because a root service's handles are invisible to
+you). The usual culprit is **CoolerControl**: liquidctl brackets every poll
+with WAKE and SLEEP, and SLEEP is hardware mode — hence the rainbow. Fix:
+
+```bash
+sudo systemctl stop coolercontrold
+sudo sed -i 's/^liquidctl_integration = true/liquidctl_integration = false/' /etc/coolercontrol/config.toml
+sudo systemctl start coolercontrold
+```
+
+GPU and hwmon fan control are unaffected; only liquidctl devices leave
+CoolerControl.
 
 **A device runs its own firmware effect while OpenRGB says it is in Direct.**
 Fixed, and worth knowing why. OpenRGB's `SETCUSTOMMODE` (1100) only assigns

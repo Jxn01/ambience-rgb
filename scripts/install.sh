@@ -39,6 +39,16 @@ fi
     sudo pacman -S --needed python-hidapi
 (Debian/Ubuntu: python3-hid)"
 
+# ⚠️ Present is not the same as KEPT. On the author's rig python-hidapi arrived as
+# a dependency of liquidctl, so pacman considered it liquidctl's: removing
+# liquidctl -- or any orphan sweep -- would have uninstalled the binding this
+# daemon imports, and the Commander Core would have died on its next open.
+# `pacman -Qdq` is used rather than parsing `-Qi`, whose labels are localised.
+if command -v pacman >/dev/null && pacman -Qdq python-hidapi >/dev/null 2>&1; then
+    sudo pacman -D --asexplicit python-hidapi >/dev/null \
+        && echo "  python-hidapi marked explicitly installed (it was only held as a dependency)"
+fi
+
 command -v openrgb >/dev/null || warn "openrgb is not installed; only the Commander Core will be driven."
 
 bold "Using $SYSTEM_PYTHON ($("$SYSTEM_PYTHON" -V))"
@@ -55,11 +65,13 @@ fi
 bold "Installed ambience-rgb into the venv"
 
 # --------------------------------------------------------------------------
-# 3. Hand the Commander Core to us, not to OpenRGB
+# 3. Hand the Commander Core to us, not to OpenRGB or CoolerControl
 #
-# Exactly one process may hold a HID device. OpenRGB registers the Commander
-# Core even though it cannot size its zones, and while it holds /dev/hidraw20
-# our driver cannot open it -- with no useful error from either side.
+# Exactly one process may DRIVE a HID device, and hidraw will not enforce it:
+# there is no exclusive open, so a second driver opens it just as successfully
+# and the two processes' commands and replies simply interleave. OpenRGB
+# registers the Commander Core even though it cannot size its zones; with its
+# detector on, nothing errors and the colours never apply.
 # --------------------------------------------------------------------------
 if [[ -f "$OPENRGB_CONFIG" ]]; then
     backup="$OPENRGB_CONFIG.bak-$(date +%Y%m%d-%H%M%S)"
@@ -84,6 +96,29 @@ PY
     echo "  backup: $backup"
 else
     warn "  No OpenRGB config at $OPENRGB_CONFIG; run OpenRGB once, then re-run this."
+fi
+
+# CoolerControl is the second contender, and it arrives silently. Its liquidctl
+# integration defaults to ON but does nothing while liquidctl is absent -- so it
+# can sit armed for months and go live at the first boot after anything installs
+# liquidctl. It then polls the Commander Core, and liquidctl brackets every poll
+# with WAKE and SLEEP; SLEEP is hardware mode, so the AIO flickers between our
+# colours and its firmware rainbow every second or two.
+# Warned about rather than edited: it is a root service that also runs GPU fan
+# curves, and editing its config safely means stopping it.
+CC_CONFIG=/etc/coolercontrol/config.toml
+if [[ -f "$CC_CONFIG" ]] && grep -qE '^[[:space:]]*liquidctl_integration[[:space:]]*=[[:space:]]*true' "$CC_CONFIG"; then
+    if "$SYSTEM_PYTHON" -c 'import liquidctl' 2>/dev/null; then
+        state="ACTIVE: liquidctl is installed, so it drives the Commander Core (from CoolerControl's next restart at the latest)"
+    else
+        state="ARMED: harmless until something installs liquidctl, then live at CoolerControl's next restart"
+    fi
+    warn "  CoolerControl's liquidctl integration is on -- $state.
+  It will fight this daemon for the Commander Core. Turn it off:
+      sudo systemctl stop coolercontrold
+      sudo sed -i 's/^liquidctl_integration = true/liquidctl_integration = false/' $CC_CONFIG
+      sudo systemctl start coolercontrold
+  GPU and hwmon fan control are unaffected; only liquidctl devices leave CoolerControl."
 fi
 
 # --------------------------------------------------------------------------

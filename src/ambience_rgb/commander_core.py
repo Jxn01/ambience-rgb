@@ -11,10 +11,15 @@ zone sized 0, and ``RESIZEZONE`` on it kills the server with
 headers at 0. liquidctl reads the topology correctly but its ``set_color`` is
 ``raise NotSupportedByDriver``. Neither can drive the fans, so we do.
 
-⚠️ **Exactly one process may hold this device.** OpenRGB's detector for it must
-be disabled, or the two will fight over ``/dev/hidraw20`` and the symptoms are
-baffling -- zones that read as size 0, colours that do not apply, no errors
-anywhere. ``scripts/install.sh`` does this; see the design doc.
+⚠️ **Exactly one process may drive this device, and hidraw will not enforce it.**
+There is no exclusive open: a second driver opens ``/dev/hidraw20`` without error
+and the two processes' commands and replies interleave. Two contenders are
+known. OpenRGB's detector for it must be disabled, or the symptoms are baffling
+-- zones that read as size 0, colours that do not apply, no errors anywhere.
+CoolerControl's liquidctl integration must be off, or liquidctl's WAKE/SLEEP
+around every poll drops the AIO into its firmware rainbow every second or two.
+``scripts/install.sh`` disables the first and warns about the second; a stray
+wake/sleep reply is recognised by :meth:`CommanderCore._mismatch`.
 """
 
 from __future__ import annotations
@@ -255,10 +260,39 @@ class CommanderCore:
         if not reply:
             raise CommanderCoreError(f"No reply to command {expect:#04x}")
         if reply[1] != expect:
-            raise CommanderCoreError(
-                f"Reply {reply[1]:#04x} does not acknowledge command {expect:#04x}"
-            )
+            raise CommanderCoreError(self._mismatch(reply[1], expect))
         return reply
+
+    def _mismatch(self, got: int, expect: int) -> str:
+        """Describe an acknowledgement mismatch, naming the one cause we can recognise.
+
+        🚨 **A reply to a WAKE/SLEEP we did not send is another process's reply.**
+        Every other driver for this controller talks to it that way: liquidctl
+        brackets *every* operation with WAKE and SLEEP, and OpenRGB wakes it on
+        start. hidraw delivers each input report to every reader, so their
+        answers land in our queue. On 2026-09-10 CoolerControl's liquidctl
+        integration did exactly that, and the only log line was ``Reply 0x01 does
+        not acknowledge command 0x0d`` -- fifty-seven times, naming neither the
+        cause nor the check.
+
+        Deliberately narrow: any other mismatch keeps the plain message, because
+        blaming a stranger for every bad byte would teach the reader to ignore
+        the one time it is true. It points at ``sudo fuser`` rather than naming the
+        process, because this daemon runs unprivileged and cannot see a root
+        service's file handles -- an unprivileged check would report no contender.
+        """
+
+        message = f"Reply {got:#04x} does not acknowledge command {expect:#04x}"
+        if got != CMD_WAKE[0] or expect == CMD_WAKE[0]:
+            return message
+        path = self._path.decode(errors="replace") if self._path else "/dev/hidrawN"
+        return (
+            f"{message} -- that is the reply to a wake/sleep this driver did not send, "
+            "so another process is driving the Commander Core. Known culprits: "
+            "CoolerControl with its liquidctl integration on, OpenRGB with its "
+            "Commander Core detector enabled, or a liquidctl command. "
+            f"Check: sudo fuser -v {path}"
+        )
 
     def _send(self, command: Sequence[int], data: bytes | Sequence[int] = ()) -> bytes:
         return self._exchange(command_packet(tuple(command), data), command[0])

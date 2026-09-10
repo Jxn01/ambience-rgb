@@ -288,6 +288,53 @@ class DrainTest(unittest.TestCase):
         self.assertEqual(calls["n"], 3, "two queued reports, then empty")
 
 
+class AnotherMasterTest(unittest.TestCase):
+    """🚨 A reply to a wake/sleep this driver never sent means another process is on it.
+
+    Observed 2026-09-10: CoolerControl picked up a newly installed liquidctl at boot
+    and began polling the Commander Core. liquidctl brackets every operation with
+    WAKE and SLEEP (``01 03 00 02`` / ``01 03 00 01``); SLEEP is hardware mode, so
+    the AIO flickered between our colours and its firmware rainbow every second or
+    two, and hidraw -- which has no exclusive open -- handed liquidctl's replies to
+    both readers. The daemon logged ``Reply 0x01 does not acknowledge command 0x0d``
+    fifty-seven times: true, and useless, because it names neither the cause nor
+    the check.
+    """
+
+    def _answering_with(self, reply_command: int) -> _Opened:
+        fake = FakeHid()
+        original = fake.write
+
+        def write(packet):
+            result = original(packet)
+            fake._next[-1] = bytes([0x00, reply_command]) + bytes(REPORT_LENGTH - 2)
+            return result
+
+        fake.write = write
+        return _Opened(fake)
+
+    def test_a_stray_wake_or_sleep_reply_names_another_process(self) -> None:
+        cc = self._answering_with(0x01)
+        with self.assertRaises(CommanderCoreError) as caught:
+            cc._send((0x0D, 0x00), (0x22,))
+        message = str(caught.exception)
+        self.assertIn("does not acknowledge", message)  # existing log greps keep matching
+        self.assertIn("another process", message)
+        self.assertIn("CoolerControl", message)
+        self.assertIn("fuser", message)
+
+    def test_an_ordinary_mismatch_does_not_blame_another_process(self) -> None:
+        # Narrow on purpose: blaming a stranger for every bad byte would teach
+        # whoever reads the journal to ignore the one time it is true.
+        cc = self._answering_with(0xFF)
+        with self.assertRaises(CommanderCoreError) as caught:
+            cc._send((0x0D, 0x00), (0x22,))
+        self.assertNotIn("another process", str(caught.exception))
+
+    def test_our_own_wake_is_not_mistaken_for_a_stranger(self) -> None:
+        _Opened(FakeHid()).wake()  # 0x01 acknowledged by 0x01: no error
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
 

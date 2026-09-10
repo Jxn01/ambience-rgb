@@ -312,6 +312,17 @@ blackouts before suspecting anything here.
 **The RGB is dark but the lamps are on.** Check the dashboard's *RGB* switch —
 it is independent of the lamps' switch by design.
 
+## Other hardware, and Windows
+
+Researched 2026-09-10, written up in
+[docs/specs/2026-09-10-devices-and-windows-research.md](docs/specs/2026-09-10-devices-and-windows-research.md):
+
+| | |
+|---|---|
+| **Ducky One 3 TKL RGB** | **Ruled out.** Its RGB is onboard-only — no host lighting software exists, so there is nothing to capture and no protocol to speak. The vendor HID interface is for firmware. All the open-source prior art targets the One **2**, a different vendor ID. |
+| **Sound Blaster Katana V2X** | **Planned, high confidence.** Already reverse-engineered: CDC ACM at `/dev/ttyACM0`, `5A`-framed commands, AES-256-GCM challenge-response, and an MIT-licensed reference implementation with a full lighting API. |
+| **Windows** | **Planned.** The only real blocker is the IPC: Windows `AF_UNIX` is `SOCK_STREAM` only, so the datagram socket needs a UDP-on-loopback sibling. Everything else follows the per-platform package pattern matterlights already proves. |
+
 ## Development
 
 ```bash

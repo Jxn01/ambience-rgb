@@ -5,7 +5,7 @@ from __future__ import annotations
 import colorsys
 import unittest
 
-from linux_rgb.render import blend, cohere, spread, treat
+from linux_rgb.render import apply_channel_order, blend, cohere, spread, treat
 
 
 def saturation_of(colour):
@@ -177,3 +177,44 @@ class CohereTest(unittest.TestCase):
 
     def test_identical_inputs_are_unchanged(self) -> None:
         self.assertEqual(cohere((7, 8, 9), (7, 8, 9), 0.5), ((7, 8, 9), (7, 8, 9)))
+
+
+class ChannelOrderTest(unittest.TestCase):
+    """🚨 One controller can wire its zones differently from each other.
+
+    Verified on this rig by sending pure primaries and looking: the ASRock
+    X870E Taichi shows RED when sent green and GREEN when sent red on its
+    onboard IO-cover and PCB zones, while its addressable fan headers -- same
+    OpenRGB device, same write -- are correct. So the option is per ZONE.
+
+    The symptom was a pink screen showing as vivid green-cyan on two zones and
+    correct pink everywhere else, which reads as anything but a wiring order.
+    """
+
+    def test_rgb_is_identity(self) -> None:
+        self.assertEqual(apply_channel_order((255, 0, 96), "RGB"), (255, 0, 96))
+
+    def test_grb_swaps_red_and_green(self) -> None:
+        self.assertEqual(apply_channel_order((255, 0, 96), "GRB"), (0, 255, 96))
+
+    def test_the_real_case_round_trips(self) -> None:
+        """Pre-swapping must make a GRB zone display the colour we meant."""
+
+        wanted = (255, 0, 96)
+        sent = apply_channel_order(wanted, "GRB")
+        displayed = (sent[1], sent[0], sent[2])  # what GRB hardware does to it
+        self.assertEqual(displayed, wanted)
+
+    def test_every_permutation_is_a_permutation(self) -> None:
+        from linux_rgb.render import CHANNEL_ORDERS
+
+        for order in CHANNEL_ORDERS:
+            out = apply_channel_order((10, 20, 30), order)
+            self.assertEqual(sorted(out), [10, 20, 30], f"{order} lost or duplicated a channel")
+
+    def test_black_and_white_are_unaffected_by_any_order(self) -> None:
+        from linux_rgb.render import CHANNEL_ORDERS
+
+        for order in CHANNEL_ORDERS:
+            self.assertEqual(apply_channel_order((0, 0, 0), order), (0, 0, 0))
+            self.assertEqual(apply_channel_order((255, 255, 255), order), (255, 255, 255))

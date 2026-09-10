@@ -51,6 +51,14 @@ class DeviceRule:
     group: str = GROUP_FAR
     bus: str = BUS_USB
     zones: dict[str, str] = field(default_factory=dict)
+    channel_order: str = "RGB"
+    """The order this device's outputs are wired, e.g. ``"GRB"``."""
+    zone_channel_order: dict[str, str] = field(default_factory=dict)
+    """Per-zone overrides, because one controller can wire zones differently.
+
+    The ASRock X870E Taichi drives its addressable headers as RGB and its own
+    onboard LEDs as GRB. Same device, same write, two orders.
+    """
     static: tuple[int, int, int] | None = None
     """A fixed colour to set once per connection, instead of syncing.
 
@@ -63,6 +71,12 @@ class DeviceRule:
 
     def matches(self, controller_name: str) -> bool:
         return self.match.lower() in controller_name.lower()
+
+    def order_for_zone(self, zone_name: str) -> str:
+        for name, order in self.zone_channel_order.items():
+            if name.lower() == zone_name.lower():
+                return order
+        return self.channel_order
 
     def group_for_zone(self, zone_name: str) -> str:
         for name, group in self.zones.items():
@@ -119,6 +133,15 @@ class Config:
             if rule.matches(controller_name):
                 return rule
         return None
+
+
+def _validate_order(value, where: str) -> str:
+    order = str(value).upper()
+    if sorted(order) != ["B", "G", "R"]:
+        raise ValueError(
+            f"{where}.channel_order must be a permutation of RGB, got {value!r}"
+        )
+    return order
 
 
 def _positive(value, where: str) -> float:
@@ -243,6 +266,11 @@ def parse_config(payload: dict, *, base_dir: Path | None = None) -> Config:
                     for name, group in zones.items()
                 },
                 static=_validate_static(entry.get("static"), where),
+                channel_order=_validate_order(entry.get("channel_order", "RGB"), where),
+                zone_channel_order={
+                    str(name): _validate_order(order, f"{where}.zone_channel_order[{name!r}]")
+                    for name, order in (entry.get("zone_channel_order") or {}).items()
+                },
             )
         )
 

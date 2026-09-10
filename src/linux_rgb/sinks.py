@@ -27,7 +27,7 @@ from linux_rgb.config import (
     DeviceRule,
 )
 from linux_rgb.openrgb_client import OpenRGBClient, OpenRGBError
-from linux_rgb.render import spread
+from linux_rgb.render import apply_channel_order, spread
 
 LOGGER = logging.getLogger("linux_rgb.sinks")
 
@@ -269,19 +269,27 @@ class OpenRGBSink:
                     for zone, group in groups:
                         if group == GROUP_EXCLUDED or zone.led_count == 0:
                             continue
-                        plan.append(
-                            (controller.index, ((zone.index, group, zone.led_count),), rule.bus, True)
-                        )
+                        plan.append((
+                            controller.index,
+                            ((zone.index, group, zone.led_count, rule.order_for_zone(zone.name)),),
+                            rule.bus,
+                            True,
+                        ))
                     continue
                 segments = tuple(
-                    (group, zone.led_count) for zone, group in groups if zone.led_count > 0
+                    (group, zone.led_count, rule.order_for_zone(zone.name))
+                    for zone, group in groups
+                    if zone.led_count > 0
                 )
                 if segments:
                     plan.append((controller.index, segments, rule.bus, False))
             elif controller.led_count > 0:
-                plan.append(
-                    (controller.index, ((rule.group, controller.led_count),), rule.bus, False)
-                )
+                plan.append((
+                    controller.index,
+                    ((rule.group, controller.led_count, rule.channel_order),),
+                    rule.bus,
+                    False,
+                ))
             else:
                 self._logger.info(
                     "OpenRGB: %s reports zero LEDs; nothing to drive", controller.name
@@ -406,17 +414,23 @@ class OpenRGBSink:
         bias = self._config.spread_bias
         treatment = self._treatment
         if per_zone:
-            for zone_index, group, count in segments:
+            for zone_index, group, count, order in segments:
                 base = near if group == GROUP_NEAR else far
                 self._client.update_zone_leds(
                     device, zone_index,
-                    spread(palette, base, count, bias=bias, treatment=treatment),
+                    [
+                        apply_channel_order(colour, order)
+                        for colour in spread(palette, base, count, bias=bias, treatment=treatment)
+                    ],
                 )
             return
         colours: list[RGB] = []
-        for group, count in segments:
+        for group, count, order in segments:
             base = near if group == GROUP_NEAR else far
-            colours.extend(spread(palette, base, count, bias=bias, treatment=treatment))
+            colours.extend(
+                apply_channel_order(colour, order)
+                for colour in spread(palette, base, count, bias=bias, treatment=treatment)
+            )
         self._client.update_leds(device, colours)
 
     def black(self) -> None:

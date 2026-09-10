@@ -65,14 +65,14 @@ def _sink(targets) -> tuple[OpenRGBSink, _FakeClient]:
 
 
 # (device, segments, bus, per_zone)
-_ONE = [(6, (("near", 2),), "usb", False)]
+_ONE = [(6, (("near", 2, "RGB"),), "usb", False)]
 # One controller split across three zones -- written as ONE packet whose array
 # carries each zone's colour in order.
-_BOARD = [(6, (("far", 1), ("far", 2), ("near", 2)), "usb", False)]
+_BOARD = [(6, (("far", 1, "RGB"), ("far", 2, "RGB"), ("near", 2, "RGB")), "usb", False)]
 # The excluded-zone fallback, which must still go zone by zone.
 _PER_ZONE = [
-    (6, ((0, "far", 1),), "usb", True),
-    (6, ((3, "near", 2),), "usb", True),
+    (6, ((0, "far", 1, "RGB"),), "usb", True),
+    (6, ((3, "near", 2, "RGB"),), "usb", True),
 ]
 
 
@@ -616,33 +616,33 @@ class PaletteReachesTheWireTest(unittest.TestCase):
         return sink, client
 
     def test_a_palette_produces_a_VARYING_array_on_the_wire(self) -> None:
-        sink, client = self._sink([(6, (("far", 40),), "usb", False)], 0.0)
+        sink, client = self._sink([(6, (("far", 40, "RGB"),), "usb", False)], 0.0)
         sink.write(NEAR, FAR, self.PALETTE)
         colours = client.writes[0][2]
         self.assertEqual(len(colours), 40)
         self.assertGreater(len(set(colours)), 3, "the palette never reached the wire")
 
     def test_no_palette_is_still_flat(self) -> None:
-        sink, client = self._sink([(6, (("far", 40),), "usb", False)], 0.0)
+        sink, client = self._sink([(6, (("far", 40, "RGB"),), "usb", False)], 0.0)
         sink.write(NEAR, FAR, [])
         self.assertEqual(set(client.writes[0][2]), {FAR})
 
     def test_bias_one_is_flat_even_with_a_palette(self) -> None:
         """The off switch has to actually switch it off."""
 
-        sink, client = self._sink([(6, (("far", 40),), "usb", False)], 1.0)
+        sink, client = self._sink([(6, (("far", 40, "RGB"),), "usb", False)], 1.0)
         sink.write(NEAR, FAR, self.PALETTE)
         self.assertEqual(set(client.writes[0][2]), {FAR})
 
     def test_the_per_zone_path_gets_the_palette_too(self) -> None:
-        sink, client = self._sink([(6, ((3, "far", 40),), "usb", True)], 0.0)
+        sink, client = self._sink([(6, ((3, "far", 40, "RGB"),), "usb", True)], 0.0)
         sink.write(NEAR, FAR, self.PALETTE)
         self.assertGreater(len(set(client.writes[0][2])), 3)
 
     def test_a_changed_palette_resends_even_when_near_and_far_hold_still(self) -> None:
         """Otherwise the gradient freezes whenever the two group colours do."""
 
-        sink, client = self._sink([(6, (("far", 40),), "usb", False)], 0.0)
+        sink, client = self._sink([(6, (("far", 40, "RGB"),), "usb", False)], 0.0)
         sink.write(NEAR, FAR, self.PALETTE)
         client.writes.clear()
         moved = [((0, 255, 255), 0.4), ((255, 255, 0), 0.35), ((255, 0, 255), 0.25)]
@@ -653,8 +653,52 @@ class PaletteReachesTheWireTest(unittest.TestCase):
         """near/far survives the gradient; it is a real choice about the room."""
 
         sink, client = self._sink(
-            [(6, (("near", 20), ("far", 20)), "usb", False)], 0.9
+            [(6, (("near", 20, "RGB"), ("far", 20, "RGB")), "usb", False)], 0.9
         )
         sink.write((255, 0, 0), (0, 0, 255), self.PALETTE)
         colours = client.writes[0][2]
         self.assertGreater(sum(c[0] for c in colours[:20]), sum(c[0] for c in colours[20:]))
+
+
+class ChannelOrderReachesTheWireTest(unittest.TestCase):
+    """The order must travel with the LEDs it applies to, per zone."""
+
+    def setUp(self) -> None:
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    def _sink(self, targets):
+        sink = OpenRGBSink(parse_config({"socket": {"path": "/tmp/x.sock"}}))
+        sink._interval = lambda _bus: 0.0  # type: ignore[method-assign]
+        sink._check_health = lambda _now: None  # type: ignore[method-assign]
+        client = _FakeClient()
+        sink._client = client
+        sink._targets = list(targets)
+        return sink, client
+
+    def test_a_grb_segment_is_pre_swapped(self) -> None:
+        sink, client = self._sink([(6, (("near", 4, "GRB"),), "usb", False)])
+        sink.write((255, 0, 96), (0, 0, 0))
+        self.assertEqual(set(client.writes[0][2]), {(0, 255, 96)})
+
+    def test_segments_on_one_device_can_differ(self) -> None:
+        """🚨 The whole point: the ASRock wires its own LEDs differently from
+        the fan headers hanging off it."""
+
+        sink, client = self._sink(
+            [(6, (("near", 2, "RGB"), ("near", 2, "GRB")), "usb", False)]
+        )
+        sink.write((255, 0, 96), (0, 0, 0))
+        colours = client.writes[0][2]
+        self.assertEqual(colours[:2], ((255, 0, 96), (255, 0, 96)))
+        self.assertEqual(colours[2:], ((0, 255, 96), (0, 255, 96)))
+
+    def test_the_per_zone_path_honours_it_too(self) -> None:
+        sink, client = self._sink([(6, ((3, "near", 4, "GRB"),), "usb", True)])
+        sink.write((255, 0, 96), (0, 0, 0))
+        self.assertEqual(set(client.writes[0][2]), {(0, 255, 96)})
+
+    def test_black_stays_black_under_reordering(self) -> None:
+        sink, client = self._sink([(6, (("near", 4, "GRB"),), "usb", False)])
+        sink.black()
+        self.assertEqual(set(client.writes[0][2]), {(0, 0, 0)})

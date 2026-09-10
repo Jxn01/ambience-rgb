@@ -96,6 +96,16 @@ group = "far"
 bus = "usb"
 zones = { "IO Cover" = "near", "PCB" = "near" }
 
+# 🚨 This board wires its own onboard LEDs differently from the fan headers
+# hanging off the very same controller. Verified by sending pure primaries and
+# looking: IO Cover and PCB show RED when sent green and GREEN when sent red,
+# while every addressable header is correct.
+#
+# That is why this is per ZONE. The symptom was a pink screen appearing as vivid
+# green-cyan on exactly two zones and correct pink everywhere else, which looks
+# like anything but a wiring order.
+zone_channel_order = { "IO Cover" = "GRB", "PCB" = "GRB" }
+
 [[devices]]
 match = "Razer Naga"
 group = "far"

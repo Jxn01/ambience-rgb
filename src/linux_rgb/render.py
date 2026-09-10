@@ -80,6 +80,37 @@ def blend(a: RGB, b: RGB, fraction: float) -> RGB:
     )
 
 
+CHANNEL_ORDERS = ("RGB", "RBG", "GRB", "GBR", "BRG", "BGR")
+_CHANNEL_INDEX = {"R": 0, "G": 1, "B": 2}
+
+
+def apply_channel_order(colour: RGB, order: str) -> RGB:
+    """Reorder our ``(r, g, b)`` into the order a device actually wires.
+
+    🚨 **Not every zone on a controller is wired the same way.** On this rig the
+    ASRock X870E Taichi drives its addressable fan headers as RGB and its own
+    onboard IO-cover and PCB LEDs as **GRB** -- same OpenRGB device, same write,
+    two different orders. Verified by sending pure primaries and looking: red
+    showed green, green showed red, blue showed blue.
+
+    That is why the option is per ZONE and not per device, and it is why the
+    symptom was so confusing: a pink screen at ``(255, 0, 96)`` came out
+    ``(0, 255, 96)``, a vivid green-cyan, on two zones while every other zone in
+    the case showed the correct pink.
+
+    ``order`` names which of our channels drives each of the device's outputs,
+    so ``"GRB"`` means "this device's first output is green".
+    """
+
+    if order == "RGB":
+        return colour
+    return (
+        colour[_CHANNEL_INDEX[order[0]]],
+        colour[_CHANNEL_INDEX[order[1]]],
+        colour[_CHANNEL_INDEX[order[2]]],
+    )
+
+
 def cohere(near: RGB, far: RGB, cohesion: float) -> tuple[RGB, RGB]:
     """Pull the two group colours toward each other by ``cohesion``.
 

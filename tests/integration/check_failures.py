@@ -18,9 +18,9 @@ import sys
 import threading
 import time
 
-from _readback import REPO_ROOT, Reader
+from _readback import REPO_ROOT, Reader, expected_colour, use_matterlights
 
-sys.path.insert(0, "/home/jxn/Projects/matterlights/src")
+use_matterlights()
 from matterlights.rgb_publish import AmbiencePublisher  # noqa: E402
 
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -29,6 +29,25 @@ from ambience_rgb.openrgb_client import OpenRGBClient  # noqa: E402
 
 NEAR, FAR = (255, 0, 0), (0, 0, 255)
 CONFIG = load_config()
+# The device this check watches. Index 0 is whatever OpenRGB enumerated first.
+WATCHED = 0
+
+
+def expected_on(index: int):
+    """The colour ``index`` will hold while NEAR/FAR are being published.
+
+    NOT ``NEAR``. Cohesion, saturation, gamma and channel order all sit between
+    what is published and what the LEDs are sent -- see ``expected_colour``.
+    Comparing against the published value made this check fail its own baseline
+    against a daemon that was working correctly.
+    """
+
+    reader = Reader(CONFIG.openrgb_host, CONFIG.openrgb_port)
+    try:
+        rule = CONFIG.rule_for(reader.controllers[index].name)
+    finally:
+        reader.close()
+    return expected_colour(CONFIG, NEAR, FAR, rule.group, rule.channel_order)
 stop = threading.Event()
 results: list[bool] = []
 
@@ -94,12 +113,13 @@ def main() -> int:
     time.sleep(3)
     print("Failure injection against the live daemon\n", flush=True)
 
-    report("baseline: a driven device shows the near colour", read(0) == [NEAR])
+    want = expected_on(WATCHED)
+    report("baseline: a driven device shows the near colour", read(WATCHED) == [want])
 
     print("  ...restarting the OpenRGB server underneath it", flush=True)
-    blank(0)
+    blank(WATCHED)
     sh("systemctl", "--user", "restart", "ambience-rgb-openrgb.service")
-    took = wait_for(0, NEAR, 120)
+    took = wait_for(WATCHED, want, 120)
     report("recovers after the OpenRGB server restarts", took is not None,
            f"({took:.0f}s)" if took else "(never)")
 
@@ -107,8 +127,8 @@ def main() -> int:
     print(f"  ...SIGKILLing the daemon (pid {pid})", flush=True)
     sh("kill", "-9", pid)
     time.sleep(2)
-    blank(0)
-    took = wait_for(0, NEAR, 120)
+    blank(WATCHED)
+    took = wait_for(WATCHED, want, 120)
     report("systemd restarts the daemon and it drives again",
            took is not None and show("ActiveState") == "active",
            f"({took:.0f}s, NRestarts {before}->{show('NRestarts')})" if took else "(never)")

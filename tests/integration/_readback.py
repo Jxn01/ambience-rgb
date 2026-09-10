@@ -19,12 +19,66 @@ which asks a human.
 from __future__ import annotations
 
 import struct
+import os
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+
+def expected_colour(config, near, far, group, order: str = "RGB"):
+    """What a device will actually be holding for a published near/far pair.
+
+    🚨 **The published colour is not the colour that reaches the LEDs**, and
+    every stage between them has bitten a check in this directory:
+
+    1. ``cohere`` pulls near and far toward each other by ``group_cohesion``, so
+       the case reads as one lit room rather than two halves arguing;
+    2. ``treat`` applies saturation and gamma, because a bulb and an LED strip
+       showing identical numbers do not look alike;
+    3. ``apply_channel_order`` permutes the bytes for zones that are not wired
+       RGB -- this board drives *IO Cover* and *PCB* as GRB.
+
+    ``check_policy`` modelled only stage 2 and failed 6 of 10 against a daemon
+    that was perfectly correct; ``check_failures`` modelled none of them and
+    failed its own baseline. Both then accused the rig. Deriving it once, here,
+    is what stops the next stage from being missed by three files independently.
+    """
+
+    toward_near, toward_far = cohere(near, far, config.group_cohesion)
+    base = toward_near if group == "near" else toward_far
+    treated = treat(base, saturation=config.saturation, gamma=config.gamma)
+    return apply_channel_order(treated, order)
+
+
+def use_matterlights() -> Path:
+    """Put matterlights' ``src`` on the path and return it.
+
+    These checks publish through matterlights' own ``AmbiencePublisher`` rather
+    than a local reimplementation, deliberately: a hand-rolled copy of the
+    payload would still pass on the day the real one changed shape, which is
+    exactly the seam worth testing. So the checks need to import it, and it is
+    not a package this project depends on.
+
+    Resolution order: ``$MATTERLIGHTS_SRC``, then a sibling checkout next to
+    this repository. Three scripts each carried the author's absolute path
+    before this existed, which made every one of them unrunnable anywhere else.
+    """
+
+    override = os.getenv("MATTERLIGHTS_SRC")
+    candidates = [Path(override)] if override else [REPO_ROOT.parent / "matterlights" / "src"]
+    for candidate in candidates:
+        if (candidate / "matterlights" / "rgb_publish.py").is_file():
+            sys.path.insert(0, str(candidate))
+            return candidate
+    raise SystemExit(
+        "Cannot find matterlights' source. Checked:\n  "
+        + "\n  ".join(str(c) for c in candidates)
+        + "\nClone it beside this repository, or set MATTERLIGHTS_SRC to its src/ directory."
+    )
+
+from ambience_rgb.render import apply_channel_order, cohere, treat  # noqa: E402
 from ambience_rgb.openrgb_client import (  # noqa: E402
     CMD_REQUEST_CONTROLLER_DATA,
     OpenRGBClient,

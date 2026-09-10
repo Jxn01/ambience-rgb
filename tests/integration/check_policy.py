@@ -16,15 +16,15 @@ import sys
 import time
 from pathlib import Path
 
-from _readback import REPO_ROOT, Reader
+from _readback import REPO_ROOT, Reader, expected_colour, use_matterlights
 
-sys.path.insert(0, "/home/jxn/Projects/matterlights/src")
+use_matterlights()
 
 from matterlights.rgb_publish import AmbiencePublisher  # noqa: E402
 
 sys.path.insert(0, str(REPO_ROOT / "src"))
 from ambience_rgb.config import load_config  # noqa: E402
-from ambience_rgb.render import treat  # noqa: E402
+from ambience_rgb.daemon import STALE_AFTER_SECONDS  # noqa: E402
 
 NEAR = (255, 0, 0)
 FAR = (0, 0, 255)
@@ -41,19 +41,24 @@ def _expectations(reader: Reader, config):
         if rule.zones:
             for zone_name, count in reader.device(controller.index)[3]:
                 if count:
-                    plan.append((controller.index, zone_name, rule.group_for_zone(zone_name)))
+                    plan.append((
+                        controller.index,
+                        zone_name,
+                        rule.group_for_zone(zone_name),
+                        rule.order_for_zone(zone_name),
+                    ))
         else:
-            plan.append((controller.index, None, rule.group))
+            plan.append((controller.index, None, rule.group, rule.channel_order))
     return plan
 
 
 def _observed(reader: Reader, plan):
     cache: dict[int, dict] = {}
-    for index, zone, group in plan:
+    for index, zone, group, order in plan:
         if index not in cache:
             cache[index] = reader.zone_colours(index)
             cache[index][None] = reader.colours(index)
-        yield index, zone, group, cache[index][zone]
+        yield index, zone, group, order, cache[index][zone]
 
 
 def _publish(publisher, near, far, seconds=3.0, **flags):
@@ -92,13 +97,27 @@ def main() -> int:
         publisher.close()
         time.sleep(1.0)
         failures = []
-        for index, zone, group, colours in _observed(reader, plan):
-            base = (0, 0, 0) if expect_black else (near if group == "near" else far)
-            # The LEDs are deliberately NOT sent the published colour: the sink
-            # applies the configured saturation and gamma, because a bulb and a
-            # strip showing identical numbers do not look alike. Expect what the
-            # sink will actually write, or this fails on every mid-tone.
-            want = treat(base, saturation=config.saturation, gamma=config.gamma)
+        # 🚨 Model the WHOLE pipeline, not the last stage of it. The LEDs are
+        # deliberately not sent the published colour: the daemon first pulls the
+        # near and far colours toward each other by `group_cohesion` (so the case
+        # reads as one lit room rather than two arguing halves), and only then
+        # applies saturation and gamma (because a bulb and a strip showing
+        # identical numbers do not look alike).
+        #
+        # This check modelled `treat` alone for as long as cohesion existed, and
+        # therefore failed 6 of 10 against a daemon that was behaving perfectly.
+        # An integration check that has drifted from the code accuses the rig.
+        for index, zone, group, order, colours in _observed(reader, plan):
+            # 🚨 And the LAST stage: some zones are not wired RGB. This board
+            # drives IO Cover and PCB as GRB, so the bytes that reach them are a
+            # permutation of the colour. Comparing against unpermuted values
+            # fails on exactly those two zones and looks like a colour bug --
+            # which is precisely how the original GRB fault presented.
+            want = (
+                (0, 0, 0)
+                if expect_black
+                else expected_colour(config, near, far, group, order)
+            )
             if colours != [tuple(want)]:
                 failures.append(f"dev{index} {zone or 'whole'}: {colours} != [{tuple(want)}]")
         for index, colour in statics.items():
@@ -117,9 +136,15 @@ def main() -> int:
     check("a dark screen blacks it", NEAR, FAR, screen_dark=True, expect_black=True)
     check("it recovers when frames resume", (255, 128, 0), (0, 128, 255))
 
-    print("  [....] no frames for 6s (stale) ...")
-    time.sleep(6.0)
-    stale_ok = all(colours == [(0, 0, 0)] for _i, _z, _g, colours in _observed(reader, plan))
+    # Derived, never hardcoded: STALE_AFTER_SECONDS was raised from 3s to 10s and
+    # this check went on sleeping 6, so it asserted that a daemon which was
+    # correctly still holding its last frame had failed to blank.
+    wait = STALE_AFTER_SECONDS + 2.0
+    print(f"  [....] no frames for {wait:.0f}s (stale) ...")
+    time.sleep(wait)
+    stale_ok = all(
+        colours == [(0, 0, 0)] for _i, _z, _g, _o, colours in _observed(reader, plan)
+    )
     print(f"  [{'PASS' if stale_ok else 'FAIL'}] a stale stream blacks it rather than freezing")
     results.append(stale_ok)
 
@@ -136,7 +161,7 @@ def main() -> int:
     publisher.close()
     time.sleep(1.0)
     widest = 0
-    for index, zone, _group in plan:
+    for index, zone, _group, _order in plan:
         colours = reader.zone_colours(index).get(zone) if zone else reader.colours(index)
         widest = max(widest, len(colours or []))
     spread_ok = widest > 3 or config.spread_bias >= 1.0

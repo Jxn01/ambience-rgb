@@ -17,9 +17,9 @@ from __future__ import annotations
 import sys
 import time
 
-from _readback import REPO_ROOT, Reader
+from _readback import REPO_ROOT, Reader, expected_colour, use_matterlights
 
-sys.path.insert(0, "/home/jxn/Projects/matterlights/src")
+use_matterlights()
 from matterlights.rgb_publish import AmbiencePublisher  # noqa: E402
 
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -43,9 +43,14 @@ def main() -> int:
         if rule.zones:
             for zone_name, count in reader.device(controller.index)[3]:
                 if count:
-                    targets.append((controller.index, zone_name, rule.group_for_zone(zone_name)))
+                    targets.append((
+                        controller.index,
+                        zone_name,
+                        rule.group_for_zone(zone_name),
+                        rule.order_for_zone(zone_name),
+                    ))
         else:
-            targets.append((controller.index, None, rule.group))
+            targets.append((controller.index, None, rule.group, rule.channel_order))
 
     print(f"soaking {duration:.0f}s at 5 Hz over {len(targets)} targets", flush=True)
     start = time.monotonic()
@@ -70,11 +75,15 @@ def main() -> int:
                 time.sleep(0.2)
             cache: dict[int, dict] = {}
             bad = []
-            for index, zone, group in targets:
+            for index, zone, group, order in targets:
                 if index not in cache:
                     cache[index] = reader.zone_colours(index)
                     cache[index][None] = reader.colours(index)
-                want = HOLD[0] if group == "near" else HOLD[1]
+                # NOT HOLD[0]/HOLD[1]: cohesion, saturation, gamma and channel
+                # order all sit between the published colour and the LEDs. This
+                # compared against the published value and reported a mismatch on
+                # every single check against a daemon that was entirely correct.
+                want = expected_colour(config, HOLD[0], HOLD[1], group, order)
                 if cache[index][zone] != [want]:
                     bad.append(f"dev{index} {zone or 'whole'}={cache[index][zone]}")
             checks += 1

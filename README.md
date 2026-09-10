@@ -1,14 +1,36 @@
 # ambience-rgb
 
-Ambient screen-to-light sync for the RGB hardware in `jxn-garuda`, driven by the
-colours [matterlights](https://github.com/Jxn01/matterlights) has already
-computed for the Matter bulbs. The lamps and the case show the same thing.
+Ambient screen-to-light sync for the RGB hardware **inside** your case, driven by
+the colours [matterlights](https://github.com/Jxn01/matterlights) has already
+computed for your Matter bulbs. The lamps and the case show the same thing,
+because they are shown the same frame.
 
-**Private and machine-specific on purpose.** It hard-codes nothing, but its
-shipped configuration describes one rig, and it includes a hand-written driver
-for one AIO controller that no available tool can drive. Windows has better
-tooling for this; the design reasoning is in
-[docs/specs/2026-09-09-ambience-rgb-design.md](docs/specs/2026-09-09-ambience-rgb-design.md).
+It drives 207 LEDs here across seven controllers, and it does it by *reading a
+config file* -- which devices belong to the light around your screen, which light
+the room behind it, which to leave alone. The table below is the author's rig,
+not a requirement.
+
+### Will this work on your machine?
+
+**If OpenRGB can see your hardware, so can this.** That is the whole dependency
+for everything except one device.
+
+The exception is the **Corsair Commander Core** (the AIO pump and its fans),
+which OpenRGB cannot size the zones of on this board -- so this repository
+carries a hand-written `hidraw` driver for it. If you do not own one, nothing is
+lost: leave it out of the config and the rest works unchanged.
+
+You will need **matterlights** running, since this program deliberately does not
+capture the screen itself. And today the transport between them is a unix
+datagram socket, so this half is **Linux-only** until the Windows port lands --
+the reasoning, and what that port actually requires, is in
+[docs/specs/2026-09-10-devices-and-windows-research.md](docs/specs/2026-09-10-devices-and-windows-research.md).
+
+The design reasoning is in
+[docs/specs/2026-09-09-ambience-rgb-design.md](docs/specs/2026-09-09-ambience-rgb-design.md),
+and the traps that cost the most time are in
+[docs/specs/EXECUTION-LOG.md](docs/specs/EXECUTION-LOG.md) -- the HID report size
+one in particular is worth reading before writing any USB HID driver.
 
 ---
 
@@ -30,7 +52,8 @@ the PipeWire load and let the lamps and the case disagree during a scene change.
 
 ## What it drives
 
-207 LEDs across seven controllers on this rig.
+207 LEDs across seven controllers on the author's rig. Yours will differ; this
+table is what `config.example.toml` describes, and it is the shipped default.
 
 | Device | LEDs | Group | Bus | Driver |
 |---|---|---|---|---|
@@ -48,6 +71,12 @@ the PipeWire load and let the lamps and the case disagree during a scene change.
 motherboard is split *per zone* because both are true of it at once.
 
 ## Install
+
+**Prerequisites:** [OpenRGB](https://openrgb.org/) (for everything but the
+Commander Core) and the *distribution* package for the `hidapi` Python binding --
+`python-hidapi` on Arch, `python3-hid` on Debian/Ubuntu. Do **not** `pip install
+hid`: the PyPI package under that name is a different library and shadows the
+system one inside the venv.
 
 ```bash
 scripts/install.sh
@@ -123,7 +152,7 @@ Raise it a step at a time and watch fan control, not a benchmark.
 
 ### What the rates actually cost
 
-Measured on `jxn-garuda`, capturing 3840×2160 at `SAMPLE_STRIDE=121`:
+Measured on the author's rig (Ryzen 7 9800X3D, RTX 5090), capturing 3840×2160 at `SAMPLE_STRIDE=121`:
 
 | Sync rate | matterlights | `ambience-rgb` | `openrgb` |
 |---|---|---|---|

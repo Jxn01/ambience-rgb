@@ -234,16 +234,31 @@ shadows the system binding — recorded in the KB after it cost a debugging
 session). The two platforms need opposite instructions, so both belong in the
 README side by side.
 
-**5. Device contention — the open question.** The one-process-per-HID-device rule
+**5. Device contention — ANSWERED 2026-09-10.**
+
+> The owner's decision: *"This will replace all rgb stuff, so ours will be the
+> only one driving rgb."* iCUE and SignalRGB will not be running on the Windows
+> half, so the blocker below is withdrawn and **the Commander Core sink can run
+> there**. The port is not OpenRGB-devices-only.
+>
+> Two consequences follow rather than disappear. Uninstalling SignalRGB frees
+> the **DDC/CI channel** it holds open, which is what the monitor is driven
+> through — an improvement, but it means monitor control moves to us and has to
+> actually work. And with no other RGB software present there is **no fallback**:
+> if this stalls on Windows the case goes dark rather than reverting to a vendor
+> app, so the lights-off hook and the wedge escalation matter more there, not
+> less.
+
+The original finding, kept for the reasoning: The one-process-per-HID-device rule
 is not OS-specific. On Windows the competitors are **iCUE** for the Commander
 Core and **SignalRGB**, which this rig is recorded as using and which also holds
 the DDC/CI channel. Both would have to be closed or disabled for the devices we
 drive. OpenRGB's Windows build may additionally need administrator rights for
 SMBus (RAM and GPU).
 
-**This needs an answer before any work starts:** if iCUE or SignalRGB are
+~~**This needs an answer before any work starts:** if iCUE or SignalRGB are
 expected to run on the Windows half, the Commander Core sink cannot run there,
-and the port is OpenRGB-devices-only.
+and the port is OpenRGB-devices-only.~~ — answered above; they will not be.
 
 **6. Lights-off at shutdown.** matterlights has `shutdown_hook/windows.py` and a
 scheduled-task installer already; reuse both. Windows allows only a few seconds

@@ -1,7 +1,10 @@
-# ambience-rgb configuration for jxn-garuda.
+# ambience-rgb configuration.
 #
-# Copy to ~/.config/ambience-rgb/config.toml to change anything; this file is the
-# fallback so a fresh checkout runs without setup.
+# This file describes the AUTHOR'S hardware. It is the shipped fallback so a
+# fresh checkout runs without setup -- it is not a template you must match.
+#
+# Copy to ~/.config/ambience-rgb/config.toml to describe yours; that path wins
+# over this one, and $AMBIENCE_RGB_CONFIG wins over both.
 
 [socket]
 # Must match RGB_PUBLISH_SOCKET in matterlights' .env. $XDG_RUNTIME_DIR is the

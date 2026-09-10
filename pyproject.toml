@@ -5,7 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ambience-rgb"
 version = "1.0.0"
-description = "Ambient screen-to-light sync for the RGB hardware in jxn-garuda"
+description = "Ambient screen-to-light sync for the RGB hardware inside your case"
+readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.11"
 # hid comes from the SYSTEM python-hidapi (cython-hidapi), NOT from PyPI.
 # The PyPI package named "hid" is a DIFFERENT library with a different API and

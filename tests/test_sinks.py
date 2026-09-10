@@ -26,18 +26,21 @@ FAR = (40, 50, 60)
 
 
 class _FakeClient:
-    def __init__(self, lag: float = 0.0, answers: bool = True) -> None:
+    def __init__(
+        self, lag: float = 0.0, answers: bool = True, controllers: int = 0
+    ) -> None:
         self.writes: list[tuple[int, int | None, tuple[int, int, int], int]] = []
         self.lag = lag
         self.answers = answers
+        self.controllers_reported = controllers
         self.probes = 0
         self.closed = False
 
-    def round_trip_seconds(self, timeout: float) -> float:
+    def probe(self, timeout: float) -> tuple[float, int]:
         self.probes += 1
         if not self.answers:
             raise OpenRGBError("no answer")
-        return self.lag
+        return self.lag, self.controllers_reported
 
     def update_leds(self, device, colours) -> None:
         self.writes.append((device, None, tuple(colours)))
@@ -239,6 +242,37 @@ class HealthCheckTest(unittest.TestCase):
         sink.write(NEAR, FAR)
         self.assertEqual(client.probes, 1)
         self.assertEqual(len(client.writes), 1)
+
+    def test_a_shrunken_device_list_is_re_planned_not_accepted(self) -> None:
+        # The real incident: OpenRGB accepts connections before detection has
+        # finished, so the daemon planned against 1 controller of 7 at login and
+        # every later probe agreed it was healthy. It drove the RAM and nothing
+        # else, indefinitely, with a clean log.
+        client = _FakeClient(lag=0.01, controllers=7)
+        sink = self._sink_with(client)
+        sink._planned_controllers = 1
+        with self.assertRaises(OpenRGBError):
+            sink.write(NEAR, FAR)
+        self.assertTrue(client.closed)
+
+    def test_a_device_set_change_is_not_counted_as_a_wedge(self) -> None:
+        # Escalation exists for a server that keeps going unresponsive. A device
+        # list that legitimately changed is not that, and counting it would
+        # restart OpenRGB three hot-plugs into a perfectly healthy run.
+        client = _FakeClient(lag=0.01, controllers=7)
+        sink = self._sink_with(client)
+        sink._planned_controllers = 1
+        with self.assertRaises(OpenRGBError):
+            sink.write(NEAR, FAR)
+        self.assertEqual(sink._reconnects, [])
+
+    def test_an_unchanged_device_set_is_written_to_normally(self) -> None:
+        client = _FakeClient(lag=0.01, controllers=7)
+        sink = self._sink_with(client)
+        sink._planned_controllers = 7
+        sink.write(NEAR, FAR)
+        self.assertEqual(len(client.writes), 1)
+        self.assertFalse(client.closed)
 
     def test_it_does_not_probe_on_every_tick(self) -> None:
         client = _FakeClient(lag=0.01)

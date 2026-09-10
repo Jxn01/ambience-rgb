@@ -193,6 +193,9 @@ class OpenRGBSink:
         self._sent: dict[tuple, tuple[tuple[RGB, RGB], float]] = {}
         self._checked_at = 0.0
         self._health_failures = 0
+        # How many controllers the current plan was built against. A change
+        # means the device set moved under us -- see _check_health.
+        self._planned_controllers = 0
         self._reconnects: list[float] = []
         # ⚠️ None, not 0.0. time.monotonic() is boot-relative, so a 0.0 sentinel
         # makes the cooldown swallow the FIRST restart for the first five
@@ -206,6 +209,7 @@ class OpenRGBSink:
         self._client = client
         self._sent.clear()
         self._targets = self._plan(client)
+        self._planned_controllers = len(client.controllers)
         if not self._targets:
             # The server answers its socket before device detection finishes, so
             # connecting early yields an empty controller list. Succeeding here
@@ -367,7 +371,7 @@ class OpenRGBSink:
         self._checked_at = now
         assert self._client is not None
         try:
-            lag = self._client.round_trip_seconds(HEALTH_TIMEOUT_SECONDS)
+            lag, controllers = self._client.probe(HEALTH_TIMEOUT_SECONDS)
         except OpenRGBError:
             self._health_failures += 1
             if self._health_failures < HEALTH_FAILURES_BEFORE_RECONNECT:
@@ -386,6 +390,29 @@ class OpenRGBSink:
             self._note_reconnect(now)
             raise
         self._health_failures = 0
+        announced = getattr(self._client, "device_list_dirty", False)
+        if announced or controllers != self._planned_controllers:
+            # 🚨 Not a wedge -- deliberately NOT counted by _note_reconnect, which
+            # exists to escalate a server that keeps going unresponsive. This is a
+            # healthy server whose device list moved, and one clean reconnect is
+            # the whole fix. Counting it here would restart OpenRGB three device
+            # changes into an otherwise perfect run.
+            # Two independent signals, deliberately. The announcement is the
+            # server's own word and catches a change that leaves the COUNT the
+            # same -- one device swapped for another. The count is the backstop
+            # for a notification we were not connected to hear.
+            self._logger.info(
+                "openrgb: device set changed (%s; planned for %d controllers, server "
+                "now reports %d); reconnecting to re-plan",
+                "server announced it" if announced else "count moved",
+                self._planned_controllers,
+                controllers,
+            )
+            self.close()
+            raise OpenRGBError(
+                f"The OpenRGB device set changed ({self._planned_controllers} -> "
+                f"{controllers} controllers); reconnecting to re-plan"
+            )
         if lag > 0.5:
             self._logger.info("openrgb: server is %.2fs behind", lag)
 

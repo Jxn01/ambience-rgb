@@ -40,6 +40,9 @@ CMD_REQUEST_CONTROLLER_COUNT = 0
 CMD_REQUEST_CONTROLLER_DATA = 1
 CMD_REQUEST_PROTOCOL_VERSION = 40
 CMD_SET_CLIENT_NAME = 50
+# Pushed BY the server, unsolicited, whenever its device list changes -- which
+# includes the moment detection finishes after startup. Nothing requests it.
+CMD_DEVICE_LIST_UPDATED = 100
 CMD_UPDATE_LEDS = 1050
 CMD_UPDATE_ZONE_LEDS = 1051
 CMD_SET_CUSTOM_MODE = 1100
@@ -200,6 +203,8 @@ class OpenRGBClient:
         self.protocol_version = PROTOCOL_VERSION
         self._socket: socket.socket | None = None
         self.controllers: list[Controller] = []
+        # Set when the server pushes DEVICE_LIST_UPDATED; cleared on re-read.
+        self.device_list_dirty = False
 
     # -- connection --------------------------------------------------------
 
@@ -209,7 +214,7 @@ class OpenRGBClient:
         except OSError as error:
             raise OpenRGBError(
                 f"Cannot reach the OpenRGB server at {self._host}:{self._port}: {error}. "
-                "Is matterlights-openrgb.service running?"
+                "Is ambience-rgb-openrgb.service running?"
             ) from error
         self._send(0, CMD_SET_CLIENT_NAME, self._name.encode() + b"\x00")
         self.protocol_version = self._negotiate_protocol()
@@ -256,14 +261,49 @@ class OpenRGBClient:
         except OSError as error:
             raise OpenRGBError(f"Send failed: {error}") from error
 
-    def _receive(self) -> bytes:
+    def _receive(self, expected: int | None = None) -> bytes:
+        """Read the reply to ``expected``, absorbing unsolicited packets first.
+
+        🚨 **The next packet on this socket is not necessarily your reply.** The
+        server pushes ``DEVICE_LIST_UPDATED`` on its own initiative -- notably
+        the instant detection finishes, which is exactly when this client is
+        most likely to be mid-request. Reading blindly hands that notification
+        back as if it were the answer, and every later reply is then off by one:
+        a controller count parsed from a zone record, a device description
+        parsed from a count. Nothing raises; the numbers are simply wrong.
+
+        This was latent for as long as the client existed. It stayed invisible
+        because the one call that could hit it -- the health probe -- discarded
+        whatever came back, so the desync silently corrected itself one request
+        later. Reading the probe's value turned it into a visible
+        ``unpack requires a buffer of 4 bytes``.
+
+        Passing ``expected`` makes the pairing explicit, so a desync raises here
+        rather than becoming a plausible wrong answer somewhere downstream.
+        """
+
         if self._socket is None:
             raise OpenRGBError("Not connected")
-        header = self._recv_exactly(16)
-        if header[:4] != MAGIC:
-            raise OpenRGBError(f"Bad magic {header[:4]!r} in reply")
-        _device, _command, size = struct.unpack("<III", header[4:16])
-        return self._recv_exactly(size)
+        while True:
+            header = self._recv_exactly(16)
+            if header[:4] != MAGIC:
+                raise OpenRGBError(f"Bad magic {header[:4]!r} in reply")
+            _device, command, size = struct.unpack("<III", header[4:16])
+            payload = self._recv_exactly(size)
+            if command == CMD_DEVICE_LIST_UPDATED:
+                # The server's own word that what we planned against is stale.
+                self.device_list_dirty = True
+                # debug, not info: the server emits one of these per detected
+                # device, so a normal startup produces a dozen identical lines.
+                # The single summary the sink logs when it re-plans is the useful
+                # record; this is only here for tracing the protocol.
+                self._logger.debug("OpenRGB: the server announced a device-list change")
+                continue
+            if expected is not None and command != expected:
+                raise OpenRGBError(
+                    f"Out of step with the server: asked for {expected}, got {command}"
+                )
+            return payload
 
     def _recv_exactly(self, size: int) -> bytes:
         assert self._socket is not None
@@ -305,7 +345,7 @@ class OpenRGBClient:
         self._socket.settimeout(2.0)
         try:
             self._send(0, CMD_REQUEST_PROTOCOL_VERSION, struct.pack("<I", PROTOCOL_VERSION))
-            (server_version,) = struct.unpack("<I", self._receive())
+            (server_version,) = struct.unpack("<I", self._receive(CMD_REQUEST_PROTOCOL_VERSION))
         except (OSError, OpenRGBError, struct.error):
             # A server too old to know the request answers nothing. Version 0 is
             # then the truth, and honouring it keeps us in step with it.
@@ -319,12 +359,17 @@ class OpenRGBClient:
         return agreed
 
     def _read_controllers(self) -> list[Controller]:
+        # Cleared BEFORE the reads, not after: a notification that arrives while
+        # we are walking the device list refers to a change we have not seen, so
+        # clearing afterwards would throw it away and leave the stale plan in
+        # place until the next unrelated change.
+        self.device_list_dirty = False
         self._send(0, CMD_REQUEST_CONTROLLER_COUNT)
-        (count,) = struct.unpack("<I", self._receive())
+        (count,) = struct.unpack("<I", self._receive(CMD_REQUEST_CONTROLLER_COUNT))
         controllers = []
         for index in range(count):
             self._send(index, CMD_REQUEST_CONTROLLER_DATA, struct.pack("<I", self.protocol_version))
-            controllers.append(parse_controller(index, self._receive()))
+            controllers.append(parse_controller(index, self._receive(CMD_REQUEST_CONTROLLER_DATA)))
         return controllers
 
     # -- writing -----------------------------------------------------------
@@ -345,8 +390,19 @@ class OpenRGBClient:
 
         self._send(device, CMD_SET_CUSTOM_MODE)
 
-    def round_trip_seconds(self, timeout: float) -> float:
-        """Time a request/reply, which measures how far behind the server is.
+    def probe(self, timeout: float) -> tuple[float, int]:
+        """Time a request/reply and report the controller count it answered with.
+
+        Returns ``(lag_seconds, controller_count)``.
+
+        🚨 **The count is not a bonus -- it is the other half of the check.** The
+        probe below has always sent ``REQUEST_CONTROLLER_COUNT`` and thrown the
+        reply away, which proved the server was *answering* but said nothing
+        about what it was answering *about*. OpenRGB accepts connections before
+        device detection finishes, so a client that connects at login can plan
+        against one controller out of seven, and every subsequent health check
+        agrees it is perfectly healthy. Reading the number that is already on the
+        wire costs no extra packet and closes that hole.
 
         🚨 **The only honest backpressure signal available.** Writes are
         fire-and-forget and, on loopback, our own send queue reads zero even
@@ -366,7 +422,7 @@ class OpenRGBClient:
         self._socket.settimeout(timeout)
         try:
             self._send(0, CMD_REQUEST_CONTROLLER_COUNT)
-            self._receive()
+            (count,) = struct.unpack("<I", self._receive(CMD_REQUEST_CONTROLLER_COUNT))
         except (OSError, OpenRGBError) as error:
             raise OpenRGBError(
                 f"The OpenRGB server did not answer within {timeout:.1f}s ({error}); "
@@ -375,7 +431,7 @@ class OpenRGBClient:
         finally:
             if self._socket is not None:
                 self._socket.settimeout(previous)
-        return time.monotonic() - started
+        return time.monotonic() - started, count
 
     def update_mode(self, device: int, mode: Mode) -> None:
         """Write a mode to the DEVICE. This is the call that changes hardware.

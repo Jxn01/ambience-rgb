@@ -13,6 +13,8 @@ import struct
 import unittest
 
 from ambience_rgb.openrgb_client import (
+    CMD_DEVICE_LIST_UPDATED,
+    CMD_REQUEST_CONTROLLER_COUNT,
     CMD_REQUEST_PROTOCOL_VERSION,
     CMD_SET_CUSTOM_MODE,
     CMD_UPDATE_MODE,
@@ -189,7 +191,7 @@ class ProtocolNegotiationTest(unittest.TestCase):
         def _send(self, device, command, payload=b"") -> None:  # type: ignore[override]
             self.sent.append((device, command, payload))
 
-        def _receive(self) -> bytes:  # type: ignore[override]
+        def _receive(self, expected: int | None = None) -> bytes:  # type: ignore[override]
             if self.reply is None:
                 raise OpenRGBError("timed out")
             return self.reply
@@ -221,3 +223,86 @@ class ProtocolNegotiationTest(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class UnsolicitedPacketTest(unittest.TestCase):
+    """The server talks when it was not asked to, and the client must cope.
+
+    🚨 **This is a desync bug, not a noise problem.** ``DEVICE_LIST_UPDATED``
+    arrives unbidden -- most often the moment detection finishes, which is
+    precisely when this client is issuing requests. A reader that assumes the
+    next packet is its own reply hands that notification back as the answer and
+    every subsequent reply is off by one. Nothing raises. The controller count
+    is read out of a zone record and simply looks like a smaller rig.
+    """
+
+    class _Stream:
+        """A socket that replays a fixed byte stream."""
+
+        def __init__(self, data: bytes) -> None:
+            self.data = data
+            self.position = 0
+
+        def recv(self, size: int) -> bytes:
+            chunk = self.data[self.position : self.position + size]
+            self.position += len(chunk)
+            return chunk
+
+        def gettimeout(self):
+            return None
+
+        def settimeout(self, _value) -> None:
+            pass
+
+    @staticmethod
+    def _packet(command: int, payload: bytes = b"") -> bytes:
+        return b"ORGB" + struct.pack("<III", 0, command, len(payload)) + payload
+
+    def _client(self, *packets: bytes) -> OpenRGBClient:
+        client = OpenRGBClient("127.0.0.1", 6742)
+        client._socket = self._Stream(b"".join(packets))  # type: ignore[assignment]
+        return client
+
+    def test_a_notification_before_the_reply_is_absorbed(self) -> None:
+        client = self._client(
+            self._packet(CMD_DEVICE_LIST_UPDATED),
+            self._packet(CMD_REQUEST_CONTROLLER_COUNT, struct.pack("<I", 7)),
+        )
+        payload = client._receive(CMD_REQUEST_CONTROLLER_COUNT)
+        self.assertEqual(struct.unpack("<I", payload), (7,))
+
+    def test_a_notification_marks_the_device_list_stale(self) -> None:
+        client = self._client(
+            self._packet(CMD_DEVICE_LIST_UPDATED),
+            self._packet(CMD_REQUEST_CONTROLLER_COUNT, struct.pack("<I", 7)),
+        )
+        self.assertFalse(client.device_list_dirty)
+        client._receive(CMD_REQUEST_CONTROLLER_COUNT)
+        self.assertTrue(client.device_list_dirty)
+
+    def test_several_notifications_in_a_row_are_all_absorbed(self) -> None:
+        client = self._client(
+            self._packet(CMD_DEVICE_LIST_UPDATED),
+            self._packet(CMD_DEVICE_LIST_UPDATED),
+            self._packet(CMD_DEVICE_LIST_UPDATED),
+            self._packet(CMD_REQUEST_CONTROLLER_COUNT, struct.pack("<I", 2)),
+        )
+        self.assertEqual(
+            struct.unpack("<I", client._receive(CMD_REQUEST_CONTROLLER_COUNT)), (2,)
+        )
+
+    def test_a_mismatched_reply_raises_instead_of_being_returned(self) -> None:
+        # Without the pairing this returned the protocol-version payload as if
+        # it were a controller count -- a plausible small number, no error.
+        client = self._client(
+            self._packet(CMD_REQUEST_PROTOCOL_VERSION, struct.pack("<I", 3))
+        )
+        with self.assertRaises(OpenRGBError):
+            client._receive(CMD_REQUEST_CONTROLLER_COUNT)
+
+    def test_an_unpaired_read_still_accepts_anything(self) -> None:
+        # Callers that genuinely do not care keep working.
+        client = self._client(
+            self._packet(CMD_REQUEST_PROTOCOL_VERSION, struct.pack("<I", 3))
+        )
+        self.assertEqual(struct.unpack("<I", client._receive()), (3,))

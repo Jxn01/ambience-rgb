@@ -320,7 +320,7 @@ Researched 2026-09-10, written up in
 | | |
 |---|---|
 | **Ducky One 3 TKL RGB** | **Ruled out.** Its RGB is onboard-only — no host lighting software exists, so there is nothing to capture and no protocol to speak. The vendor HID interface is for firmware. All the open-source prior art targets the One **2**, a different vendor ID. |
-| **Sound Blaster Katana V2X** | **Planned, high confidence.** Already reverse-engineered: CDC ACM at `/dev/ttyACM0`, `5A`-framed commands, AES-256-GCM challenge-response, and an MIT-licensed reference implementation with a full lighting API. |
+| **Sound Blaster Katana V2X** | **Planned, high confidence — and it works on Windows too.** Already reverse-engineered: CDC ACM at `/dev/ttyACM0`, `5A`-framed commands, AES-256-GCM challenge-response, MIT-licensed reference implementation. Creative's own Windows app uses the same CDC channel, so a serial-based sink is the most portable device here — no OpenRGB server, no HID. |
 | **Windows** | **Planned.** The only real blocker is the IPC: Windows `AF_UNIX` is `SOCK_STREAM` only, so the datagram socket needs a UDP-on-loopback sibling. Everything else follows the per-platform package pattern matterlights already proves. |
 
 ## Development

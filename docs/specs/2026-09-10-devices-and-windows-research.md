@@ -139,6 +139,38 @@ build toolchain and a second process to supervise.
 6. Add a Katana phase to `tests/integration/check_hardware.py` — the only check
    that can fail for the right reason.
 
+### On Windows: yes — and it is the most portable device of the three
+
+Worth stating plainly, because it inverts the usual expectation.
+
+- **Creative's own Windows software drives this device over the same CDC
+  channel.** The reverse engineering was done *on Windows*, capturing the Creative
+  App with USBPcap, and the challenge-response was lifted out of **`CTCDC.dll`** —
+  "Creative Technology CDC". The protocol is not a Linux discovery; it is the
+  vendor's own Windows transport.
+- **The reference crate's Linux-ness is plumbing, not protocol.** It uses the
+  cross-platform `serialport` crate and is Linux-only in *device discovery*
+  (`/dev/ttyACM*`, udev). Since we would port the protocol to Python regardless,
+  `pyserial` covers both platforms with one implementation.
+- The device presents a **complete, standard CDC-ACM function with an Interface
+  Association Descriptor** (Header, ACM, Union, Call Management), so Windows
+  should bind `usbser.sys` and expose it as a COM port.
+
+⚠️ **Two honest caveats.** `bInterfaceProtocol` is `0` rather than `1`, which makes
+inbox `usbser.sys` binding likely but not certain; if no COM port appears, the
+fallback is WinUSB through `pyusb`, also cross-platform. And **none of this is
+verified over there** — confirming it takes one boot into Windows and a look in
+Device Manager for a COM port on `041e:3283`.
+
+⚠️ **Contention applies here too.** The Creative App will hold the COM port
+exclusively while it runs. Same one-process rule that governs iCUE, SignalRGB and
+OpenRGB on that side.
+
+**The strategic consequence:** a `KatanaSink` is the *least* platform-dependent
+thing in this project. It needs no OpenRGB server and no HID access — just a
+serial port. If the Windows port ever stalls on iCUE holding the Commander Core,
+the Katana would still work on both halves from one code path.
+
 **Risks, honestly:**
 
 - **Firmware mismatch** is the big one, and step 2 exists to find it early.

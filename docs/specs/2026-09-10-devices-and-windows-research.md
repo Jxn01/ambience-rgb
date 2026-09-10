@@ -6,7 +6,7 @@ One is ruled out, two are planned.
 | | Verdict | Confidence |
 |---|---|---|
 | Ducky One 3 TKL RGB | **Ruled out** — no host lighting protocol exists to speak | High |
-| Sound Blaster Katana V2X | **Planned** — already reverse-engineered by someone else | High |
+| Sound Blaster Katana V2X | **Planned, verified on both OSes** — reverse-engineered by someone else; our firmware is the exact tested version; Windows binds it to inbox `usbser` as COM3 | High |
 | Windows port | **Planned** — small hostile surface, pattern already proven next door | Moderate |
 
 ---
@@ -75,7 +75,7 @@ the `+` ACL). A one-line rule would fix it.
 
 ---
 
-## 2. Sound Blaster Katana V2X — planned
+## 2. Sound Blaster Katana V2X — planned, verified on Linux and Windows
 
 `041e:3283`, present, and **someone has already done the hard part.**
 
@@ -90,7 +90,7 @@ Katana V2 and V2X**.
 | Transport | **CDC ACM serial**, not HID — `/dev/ttyACM0` here |
 | Framing | `5A` start marker, opcode byte, length byte, payload |
 | Auth | **AES-256-GCM challenge-response**: device sends a 32-byte nonce, host replies with IV + ciphertext + tag using a device-specific hardcoded key |
-| Tested firmware | `1.3.230619.1820` |
+| Tested firmware | `1.3.230619.1820` — **ours is identical** (read from Creative's mobile app, 2026-09-10) |
 
 The lighting API is exactly what a sink needs:
 
@@ -127,9 +127,13 @@ build toolchain and a second process to supervise.
 **Order of work:**
 
 1. Grant access to `/dev/ttyACM0` (udev rule, matching on `041e:3283`).
-2. Run `v2x-ctl status` first — **verify our `bcdDevice 10.30` against the tested
-   `1.3.230619.1820`** before writing a line of code. A firmware mismatch could
-   invalidate the key or the opcodes.
+2. ~~Verify our firmware against the tested `1.3.230619.1820`.~~ **Done
+   2026-09-10: identical.** It was never answerable from `bcdDevice 10.30`, which an
+   earlier draft of this step compared against — `bcdDevice` is the USB device
+   release number, not the application firmware. The real version came from
+   Creative's mobile app. A handshake (`v2x-ctl status`, or our own) is still the
+   first thing to run: a matching version is strong evidence the published key
+   works, not proof.
 3. Establish the handshake in Python and read `LightingState` back. That readback
    is valuable: unlike the Commander Core, this device can tell us what it holds.
 4. Add `KatanaSink` + `[katana]` config (`enabled`, `group`, `rate_hz`).
@@ -156,15 +160,25 @@ Worth stating plainly, because it inverts the usual expectation.
   Association Descriptor** (Header, ACM, Union, Call Management), so Windows
   should bind `usbser.sys` and expose it as a COM port.
 
-⚠️ **Two honest caveats.** `bInterfaceProtocol` is `0` rather than `1`, which makes
-inbox `usbser.sys` binding likely but not certain; if no COM port appears, the
-fallback is WinUSB through `pyusb`, also cross-platform. And **none of this is
-verified over there** — confirming it takes one boot into Windows and a look in
-Device Manager for a COM port on `041e:3283`.
+✅ **Verified on Windows, 2026-09-10.** Both caveats that stood here are closed:
 
-⚠️ **Contention applies here too.** The Creative App will hold the COM port
-exclusively while it runs. Same one-process rule that governs iCUE, SignalRGB and
-OpenRGB on that side.
+| | |
+|---|---|
+| COM port | **`COM3`** — `USB Serial Device (COM3)`, status OK |
+| Node | `USB\VID_041E&PID_3283&MI_01\B&1E93D097&0&0001` |
+| Driver | **`usbser`** (inbox `usbser.sys`) — it bound despite `bInterfaceProtocol 0` |
+| Parent | `USB\VID_041E&PID_3283\402FD4793EECD2FE`, keyed on the device serial, so COM3 should stay stable across reboots |
+
+So `pyserial` opens it on both halves with one implementation, and the
+WinUSB/`pyusb` fallback is not needed. The composite layout matched Linux
+exactly: `MI_00` HID consumer control, `MI_01` serial, `MI_03` the audio function
+(`SB Katana V2X`, class MEDIA).
+
+✅ **No contention on this machine.** The Creative App — the only thing that
+would hold COM3 exclusively — is **not installed** on the Windows half. SignalRGB
+has been **removed from autostart** (not uninstalled), consistent with
+ambience-rgb becoming the only RGB software there. The one-process rule still
+applies: installing the Creative App later would bring the contention back.
 
 **The strategic consequence:** a `KatanaSink` is the *least* platform-dependent
 thing in this project. It needs no OpenRGB server and no HID access — just a
@@ -173,7 +187,15 @@ the Katana would still work on both halves from one code path.
 
 **Risks, honestly:**
 
-- **Firmware mismatch** is the big one, and step 2 exists to find it early.
+- ~~**Firmware mismatch** is the big one.~~ Closed — ours is the tested version.
+- 🚨 **Do not apply the available firmware update (`1.30.260813.1100`) yet.** It
+  reopens exactly the risk that was just closed. Its date component reads
+  2026-08-13 — six months *after* the protocol and its hardcoded key were
+  published — and a vendor whose authentication has been published has an
+  obvious reason to change the key or the handshake. That is a plausible risk,
+  not a known one; nobody has checked. Whether the update can be rolled back is
+  also unknown. Hold it until the sink exists and is verified, then decide
+  deliberately — and if Creative's mobile app offers it, decline.
 - **It is an audio device.** Colour writes share a link with the audio path;
   verify that streaming colours does not glitch playback. This is the one risk
   with no precedent in this project.

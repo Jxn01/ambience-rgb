@@ -18,7 +18,7 @@ port = 6742
 # Per BUS, not global. USB HID devices are happy at the full sync rate; SMBus is
 # shared with the sensors that fan control and monitoring read, and hammering it
 # is the one genuinely risky thing this program does.
-usb_hz = 5.0
+usb_hz = 10.0
 smbus_hz = 1.0
 
 [commander]

@@ -80,6 +80,11 @@ point it was unambiguous: `read(n, 1)` returns empty in 0.001 s, `read(n, 0)`
 never returns. Both the non-zero timeout and the loop bound are asserted by
 tests now, because either one alone is still a hang.
 
+*Superseded 2026-09-11:* on Windows that 1 ms read costs 15.5 ms, before every
+exchange, and held the daemon under matterlights' frame rate. The handle is
+non-blocking now and the drain reads with no timeout; the loop bound stays. See
+*A "1 ms" HID read costs 15.5 ms on Windows*, below.
+
 The wider lesson repeated from earlier in the session: **when a process hangs,
 instrument the sequence rather than reasoning about which line is guilty.** Both
 wrong guesses were plausible and both were wrong.
@@ -913,6 +918,50 @@ reads a queue. matterlights' bulb worker already hands over through one
 latest-wins slot (`light_worker._pending`, guarded by
 `test_latest_wins_rather_than_queueing`) and its Linux capture keeps only
 `_latest` -- which is why the bulbs never lagged.
+
+### 🚨 A "1 ms" HID read costs 15.5 ms on Windows
+
+Why a tick took 218 ms, measured with the daemon's own `build_sinks()` driving a
+colour that changed every pass (a scratch harness, 20 s): the OpenRGB and Katana
+sinks together 0.2 ms; the Commander Core **217.7 ms a frame** -- ~14 exchanges
+at 16.0 ms, of which **13.3 ms was the drain**. The drain read with a 1 ms
+timeout, because a 0 ms one blocks (*A 0 ms HID timeout BLOCKS*, above). On the
+real AIO, daemon stopped:
+
+| read on an empty queue | cost |
+|---|---|
+| blocking handle, `read(N, 1)` -- the drain as written | median 15.53 ms, max 16.08 |
+| non-blocking handle, `read(N)` | median 0.00 ms |
+| non-blocking handle, `read(N, 1)` | median 15.53 ms -- a timeout it is given still waits |
+| a whole wake exchange, either mode | median 15.99 ms, so the device's round trip is ~0.5 ms |
+
+The system timer was already at 0.5 ms resolution, so this is hidapi's timed
+read on Windows, not the 15.6 ms scheduler tick. 97% of every exchange was the
+drain waiting out a timeout nobody meant.
+
+**Fix:** `CommanderCore._adopt()` puts the handle in non-blocking mode -- the one
+place it is set; `open()` and the tests both come through it -- and `_drain()`
+reads with no timeout. Reply reads keep their 250 ms. The test fake now behaves
+like cython-hidapi: a timed read of an empty queue tallies its wait, and a
+timeout-free read on a blocking handle raises, since the real one never returns
+-- so the 2026-09-09 hang stays impossible by construction. `NonBlockingDrainTest`
+opens through the real `open()` and was red before the fix on all four counts:
+14 drains waited in one colour frame, an empty drain waited, the handle was
+blocking, and the timeouts asked for were {1, 250} rather than {0, 250}.
+
+| on the real hardware | before | after |
+|---|---|---|
+| daemon ticks per second | 4.44 | **19.73** |
+| Commander Core, one frame | 217.7 ms | **49.9 ms** |
+| `_drain` | 13.3 ms | **0.0 ms** |
+| `_exchange`, median | 16.0 ms | **2.0 ms** (max 56) |
+
+With both fixes running, the owner watched a one-hour RGB ambience test video
+full screen: "the bulbs and the rgb follows it."
+
+**The class, swept:** the Commander Core is the only HID device ambience-rgb
+opens. The Katana is a serial port; its drain waits one 50 ms read slice, but
+only while connecting, never per frame.
 
 ## Deliberately not done
 

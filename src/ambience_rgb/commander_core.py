@@ -76,9 +76,6 @@ _READ_TIMEOUT_MS = 250
 # Ceiling on the pre-write drain; see CommanderCore._drain.
 _MAX_DRAIN_READS = 32
 
-# Must be > 0: cython-hidapi treats a 0 ms timeout as BLOCKING.
-_DRAIN_TIMEOUT_MS = 1
-
 
 class CommanderCoreError(RuntimeError):
     """The controller could not be opened or did not answer as expected."""
@@ -179,7 +176,7 @@ class CommanderCore:
             raise CommanderCoreError(
                 f"Cannot open {path!r}: {error}. Another process (usually OpenRGB) may hold it."
             ) from error
-        self._device = device
+        self._adopt(device)
         self._path = path
 
         # The controller answers reads with a zeroed data type until it is
@@ -251,6 +248,19 @@ class CommanderCore:
 
     # -- transport ---------------------------------------------------------
 
+    def _adopt(self, device) -> None:
+        """Attach an open handle in the mode every exchange assumes: non-blocking.
+
+        🚨 **On a non-blocking handle a read without a timeout returns at once,
+        and a read that names one still waits for it.** The drain needs the
+        first and the reply read the second. This is the one place the mode is
+        set -- open() and the tests both come through here -- so both hold by
+        construction. See _drain for what the mode is worth.
+        """
+
+        device.set_nonblocking(1)
+        self._device = device
+
     def _drain(self) -> None:
         """Discard any reply still queued from an earlier exchange.
 
@@ -264,14 +274,19 @@ class CommanderCore:
         """
 
         assert self._device is not None
-        # ⚠️ The timeout must be 1 ms, NOT 0. In cython-hidapi a timeout of 0
-        # BLOCKS -- it does not mean "non-blocking" -- so a drain written the
-        # obvious way hangs the daemon forever on the first empty queue.
-        # Measured: read(N, 1) returns empty in 0.001 s; read(N, 0) never
-        # returns. Bounded as well, so a device that keeps talking cannot
-        # trap the loop either.
+        # 🚨 No timeout, on the non-blocking handle _adopt set up: the drain
+        # must never WAIT, only look. Both ways of getting that wrong shipped:
+        # - read(N) -- cython-hidapi's read(N, 0) -- on a BLOCKING handle never
+        #   returns at all. It hung the daemon on the first empty queue.
+        # - read(N, 1) returns in 1 ms on Linux, but took 15.5 ms on Windows
+        #   (measured 2026-09-11), before each of the ~14 exchanges in a colour
+        #   frame: 218 ms a frame, 97% of it waiting. That held the daemon to
+        #   4.4 ticks a second, under matterlights' 5, and the frames it could
+        #   not keep up with queued in its socket, minutes deep.
+        # Non-blocking read(N) returned in 0.00 ms. Bounded as well, so a
+        # device that keeps talking cannot trap the loop either.
         for _ in range(_MAX_DRAIN_READS):
-            if not self._device.read(REPORT_LENGTH, _DRAIN_TIMEOUT_MS):
+            if not self._device.read(REPORT_LENGTH):
                 return
 
     def _exchange(self, packet: bytes, expect: int) -> bytes:

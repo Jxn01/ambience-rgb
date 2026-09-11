@@ -8,7 +8,10 @@ closing always writes black.
 
 from __future__ import annotations
 
+import sys
+import types
 import unittest
+from unittest import mock
 
 from ambience_rgb.commander_core import CommanderCore, CommanderCoreError, find_device_path
 from ambience_rgb.commander_protocol import DATA_TYPE_LED_COUNT, PORT_SLOTS, REPORT_LENGTH
@@ -33,11 +36,21 @@ def reassemble_colour_payload(written: list[bytes]) -> bytes:
 
 
 class FakeHid:
-    """Answers like a Commander Core: echoes the command byte at index 1."""
+    """Answers like a Commander Core: echoes the command byte at index 1.
+
+    Reads behave as cython-hidapi's do, because the driver's drain depends on
+    exactly this: ``read(n, timeout_ms)`` with a timeout waits that long when
+    nothing is queued -- tallied in ``waited_ms`` -- while ``read(n)`` (timeout
+    0) returns at once in non-blocking mode and never returns at all in
+    blocking mode, which here raises instead of hanging the suite.
+    """
 
     def __init__(self, led_counts: bytes | None = None) -> None:
         self.written: list[bytes] = []
         self.closed = False
+        self.opened_path: bytes | None = None
+        self.nonblocking = False
+        self.waited_ms = 0
         self._next: list[bytes] = []
         self._led_counts = led_counts if led_counts is not None else (
             bytes([7])
@@ -61,21 +74,99 @@ class FakeHid:
         self._next.append(bytes(reply))
         return len(packet)
 
-    def read(self, length: int, timeout_ms: int = -1) -> list[int]:
-        # Matches cython-hidapi: read(max_length, timeout_ms). The driver drains
-        # with timeout_ms=0 before every write, so the signature matters.
-        return list(self._next.pop(0)) if self._next else []
+    def open_path(self, path: bytes) -> None:
+        self.opened_path = path
+
+    def set_nonblocking(self, value: int) -> int:
+        self.nonblocking = bool(value)
+        return 0
+
+    def read(self, length: int, timeout_ms: int = 0) -> list[int]:
+        # cython-hidapi's signature and semantics: read(max_length, timeout_ms=0).
+        if self._next:
+            return list(self._next.pop(0))
+        if timeout_ms > 0:
+            self.waited_ms += timeout_ms
+            return []
+        if timeout_ms == 0 and self.nonblocking:
+            return []
+        raise AssertionError(
+            f"read({length}, {timeout_ms}) on an empty queue never returns on a blocking handle"
+        )
 
     def close(self) -> None:
         self.closed = True
 
 
 class _Opened(CommanderCore):
-    """CommanderCore pre-attached to a fake, skipping hid enumeration."""
+    """CommanderCore pre-attached to a fake, skipping hid enumeration.
+
+    Attached the way open() attaches a real handle, so the fake is in the mode
+    every exchange assumes -- see NonBlockingDrainTest.
+    """
 
     def __init__(self, fake: FakeHid) -> None:
         super().__init__(path=b"/dev/fake")
-        self._device = fake
+        self._adopt(fake)
+
+
+class NonBlockingDrainTest(unittest.TestCase):
+    """🚨 The drain must not wait -- and a timed read on an empty queue does.
+
+    Measured on the Windows half, 2026-09-11: hidapi's ``read(64, 1)`` on an
+    empty queue took 15.5 ms there, not 1 ms, and the driver drained before each
+    of the ~14 exchanges in a colour frame. A frame cost 218 ms, 97% of it
+    waiting, which held the daemon to 4.4 ticks a second -- under matterlights'
+    5 -- and the frames it could not keep up with queued in its socket, minutes
+    deep. In non-blocking mode ``read(64)`` returned in 0.00 ms, while a read
+    that names a timeout still waited for its reply. (hidraw on Linux returns
+    the same 1 ms read in 1 ms, which is why this never showed there.)
+    """
+
+    def _open(self) -> tuple[CommanderCore, FakeHid]:
+        """Open through the real open(), with a fake in place of the hid module."""
+
+        fake = FakeHid()
+        with mock.patch.dict(sys.modules, {"hid": types.SimpleNamespace(device=lambda: fake)}):
+            core = CommanderCore(path=b"/dev/fake").open()
+        self.assertEqual(fake.opened_path, b"/dev/fake")
+        return core, fake
+
+    def test_open_leaves_the_handle_non_blocking(self) -> None:
+        _core, fake = self._open()
+        self.assertTrue(fake.nonblocking, "on a blocking handle the drain must wait -- or hang")
+
+    def test_an_empty_queue_is_drained_without_waiting(self) -> None:
+        core, fake = self._open()
+        fake.waited_ms = 0
+        core._drain()
+        self.assertEqual(fake.waited_ms, 0, "the drain waited on an empty queue")
+
+    def test_a_colour_frame_waits_for_nothing_but_replies(self) -> None:
+        core, fake = self._open()
+        fake.waited_ms = 0
+        core.set_colour((10, 20, 30), (40, 50, 60))
+        self.assertEqual(fake.waited_ms, 0, "the drains in one colour frame waited")
+
+    def test_the_reply_read_still_names_its_timeout(self) -> None:
+        """Non-blocking mode waits only on a read that names a timeout, so the reply must."""
+
+        from ambience_rgb.commander_core import _READ_TIMEOUT_MS
+
+        core, fake = self._open()
+        timeouts: list[int] = []
+        original = fake.read
+
+        def recording(length, timeout_ms=0):
+            timeouts.append(timeout_ms)
+            return original(length, timeout_ms)
+
+        fake.read = recording
+        core.wake()
+        self.assertIn(_READ_TIMEOUT_MS, timeouts, "the reply read must wait for the device")
+        self.assertEqual(
+            set(timeouts), {0, _READ_TIMEOUT_MS}, "a drain poll is timeout 0, a reply read the budget"
+        )
 
 
 class TransportTest(unittest.TestCase):
@@ -303,25 +394,31 @@ class DrainTest(unittest.TestCase):
         cc = _Opened(fake)
         cc._drain()  # must return rather than spin
 
-    def test_it_never_asks_for_a_zero_timeout(self) -> None:
-        """A 0 ms timeout BLOCKS in cython-hidapi; it does not poll.
+    def test_a_timeout_free_read_only_ever_meets_a_non_blocking_handle(self) -> None:
+        """``read(n)`` BLOCKS FOREVER on a blocking handle in cython-hidapi; it does not poll.
 
-        Written the obvious way this hung the daemon outright, so the value is
-        asserted rather than trusted to survive a tidy-up.
+        Written that way on a blocking handle, the drain hung the daemon outright
+        -- which is why it once read with a 1 ms timeout instead. That timeout
+        cost 15.5 ms a read on Windows (see NonBlockingDrainTest), so the drain
+        now reads with no timeout, on a handle open() has made non-blocking. This
+        pins the pairing, asserted rather than trusted to survive a tidy-up:
+        every timeout-free read must find the handle non-blocking.
         """
 
         fake = FakeHid()
-        seen: list[int] = []
+        seen: list[tuple[int, bool]] = []
+        original = fake.read
 
-        def recording(length, timeout_ms=-1):
-            seen.append(timeout_ms)
-            return []
+        def recording(length, timeout_ms=0):
+            seen.append((timeout_ms, fake.nonblocking))
+            return original(length, timeout_ms)
 
         fake.read = recording
         _Opened(fake)._drain()
         self.assertTrue(seen, "the drain should have read at least once")
-        for timeout in seen:
-            self.assertGreater(timeout, 0, "0 would block forever")
+        for timeout_ms, nonblocking in seen:
+            if timeout_ms == 0:
+                self.assertTrue(nonblocking, "read(n) on a blocking handle never returns")
 
     def test_it_stops_as_soon_as_the_queue_is_empty(self) -> None:
         fake = FakeHid()
@@ -436,9 +533,10 @@ class EndpointRetryTest(unittest.TestCase):
     class _FlakyHid(FakeHid):
         """Drops the Nth REPLY once, then behaves.
 
-        Only real reply reads are counted. The drain also calls read(), with a
-        1 ms timeout, and an empty return there is its normal successful result
-        -- counting those made the fake fail somewhere unpredictable.
+        Only real reply reads are counted. The drain also calls read(), with no
+        timeout on the non-blocking handle, and an empty return there is its
+        normal successful result -- counting those made the fake fail somewhere
+        unpredictable.
         """
 
         def __init__(self, fail_on: int) -> None:
@@ -446,13 +544,13 @@ class EndpointRetryTest(unittest.TestCase):
             self.fail_on = fail_on
             self.replies = 0
 
-        def read(self, length, timeout):
-            if timeout <= 1:  # a drain poll, not a reply read
-                return super().read(length, timeout)
+        def read(self, length, timeout_ms=0):
+            if timeout_ms == 0:  # a drain poll, not a reply read
+                return super().read(length, timeout_ms)
             self.replies += 1
             if self.replies == self.fail_on:
                 return []  # no reply: exactly what was seen on the wire
-            return super().read(length, timeout)
+            return super().read(length, timeout_ms)
 
     def test_a_single_dropped_reply_is_retried_not_raised(self) -> None:
         fake = self._FlakyHid(fail_on=2)
@@ -462,7 +560,7 @@ class EndpointRetryTest(unittest.TestCase):
 
     def test_it_gives_up_eventually_rather_than_looping(self) -> None:
         class Silent(FakeHid):
-            def read(self, length, timeout):
+            def read(self, length, timeout_ms=0):
                 return []
 
         cc = _Opened(Silent())

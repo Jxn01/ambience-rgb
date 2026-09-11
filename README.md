@@ -353,6 +353,17 @@ od -An -tx1 /sys/class/hidraw/hidraw20/device/report_descriptor
 # 75 08 96 40 00  ->  Report Size 8 bits x Report Count 0x0040 = 64 bytes
 ```
 
+⚠️ **The drain before every command must never wait.** A reply that arrives late
+would otherwise be read as the answer to the next command, so each exchange
+first discards whatever is queued, as liquidctl does. The handle is opened
+non-blocking (`CommanderCore._adopt`) and the drain reads with no timeout, which
+on that handle returns at once. Both obvious alternatives shipped and failed:
+`read(n)` on a blocking handle -- cython-hidapi's timeout 0 -- never returns and
+hung the daemon; `read(n, 1)` costs 1 ms on Linux but 15.5 ms on Windows, before
+each of the ~14 exchanges in a frame, which held the daemon under matterlights'
+frame rate. Reply reads keep their 250 ms timeout: hidapi still waits for a
+timeout it is given, even on a non-blocking handle.
+
 ⚠️ **Exactly one process may drive a HID device — and hidraw will not enforce
 it.** A second program opens `/dev/hidraw20` just as successfully as the first;
 their commands and replies simply interleave. Two contenders are known:

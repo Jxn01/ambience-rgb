@@ -855,6 +855,65 @@ it. That poll now decodes as `"oem"` and cannot raise.
 Tests: 455 here, green on Linux 3.14 and 3.12 and on Windows CPython under Wine;
 matterlights 280 on Linux, and its RGB publisher tests on Windows CPython too.
 
+## 2026-09-11: the first boot on Windows
+
+Worked through from the handoff (`Desktop\ambience-rgb-windows-handoff.md` on
+the Windows half) by an agent on the machine, the owner watching the case.
+SignalRGB and iCUE were uninstalled and purged first, at the owner's request;
+OpenRGB 1.0rc3.1 was installed; `install.ps1 -DisableCompetitors` registered the
+three tasks; the suite ran green on the real Windows CPython, 455 tests with 11
+skipped. The evidence for every step is in `Desktop\ambience-rgb-windows-results.md`
+on that half. Then the owner looked at the case and found what no Linux or Wine
+run could have shown.
+
+### 🚨 The case ran behind the screen: a queue of absolute state, replayed
+
+"The lights follow the screen correctly, but the rgb ... lag behind screen
+changes like 2-3 minutes." Not stuck and not wrong: every colour arrived, in
+order, late -- while the bulbs, fed by the same matterlights frames, kept up.
+
+The daemon took ONE datagram per tick, the oldest waiting, and wrote every
+device before taking the next. Harmless while a tick is shorter than
+matterlights' frame interval (0.2 s); a steady leak otherwise. On Windows a tick
+took 218 ms -- 4.44 a second against 5 frames, because of the Commander Core's
+drain, fixed next. What bounds the leak is the socket's queue, and the two
+halves differ by an order of magnitude:
+
+- **Linux, unix datagram:** about ten datagrams, then the sender is refused --
+  and Linux's ticks never fell behind anyway (an exchange takes 3 ms there).
+- **Windows, UDP:** 1000 real-sized frames (358 bytes) sent to a socket that
+  never reads -- it kept **184**, 65,872 bytes against the default 64 KB
+  SO_RCVBUF, which ambience-rgb never changes, and dropped 816. Full, that is
+  184 ticks behind: 41 s at the 218 ms the harness measured. The owner's
+  estimate was minutes. The live daemon's tick before the fix was never
+  measured, so whether its ticks ran slower than the harness's (one reply
+  timeout alone is 250 ms) or the estimate was generous is open. The mechanism
+  is not.
+
+🚨 **Worse than lag.** A datagram arriving at a full UDP buffer is dropped
+*without a trace*: netstat's UDP "Receive Errors" did not move for any of the
+816. And the stop command is a datagram. `off --stop-daemon` at 02:05:13 was
+still unanswered at 02:13:13, 480 s later; a queued stop is reached within 184
+ticks, so it was almost certainly dropped. The shutdown task sends the same
+datagram: at a real shutdown the case would have stayed lit and the daemon kept
+the Katana's COM port.
+
+**Fix:** `Daemon._receive` still waits for the first datagram, then takes
+everything already queued without waiting -- at most 256, re-checking the stop
+flag -- keeps only the newest frame, and acts on every command found on the way.
+A frame is absolute state; once a newer one exists the older is worth nothing.
+`tests/test_daemon_lifecycle.py::BacklogTest` builds a 40-frame backlog behind a
+100 ms sink: before the fix, 38 stale frames were written ahead of the newest
+and a queued stop took 3.9 s; after it, at most three, and the stop lands in
+under half the replay time. Live, after this and the drain fix, `off
+--stop-daemon` returned in 522 ms and the daemon's own black reached every sink.
+
+**The class, swept:** this is the only consumer of frames in either repo that
+reads a queue. matterlights' bulb worker already hands over through one
+latest-wins slot (`light_worker._pending`, guarded by
+`test_latest_wins_rather_than_queueing`) and its Linux capture keeps only
+`_latest` -- which is why the bulbs never lagged.
+
 ## Deliberately not done
 
 - **Custom colours and patterns** drive the bulbs only; the RGB goes black in

@@ -577,6 +577,21 @@ Scheduler's restart-on-failure covers only a failure to start, and checklist
 item 10 confirms it -- so a stopped daemon stays stopped until then or the next
 logon.
 
+**The case follows the screen, but late -- tens of seconds to minutes** -- while
+the bulbs, fed by the same matterlights, keep up. Fixed on 2026-09-11; if it
+ever comes back, the daemon is replaying a queue. Each tick takes the NEWEST
+frame waiting and drops the rest -- a frame is absolute state, worthless once a
+newer one exists -- and acts on any command found among them. A build that read
+one datagram per tick, the oldest, fell behind whenever a tick outlasted
+matterlights' frame interval, and on Windows the only bound is the UDP receive
+buffer: 64 KB, about 184 frames, so the case fell up to 184 ticks behind -- 41 s
+at the 218 ms tick measured there, longer at a slower one. Worse, once that buffer is full a
+datagram arriving with no free slot is dropped without a trace -- netstat's UDP
+"Receive Errors" does not count it -- and the stop command is a datagram, so
+`off --stop-daemon`, and the shutdown task with it, could not stop the daemon.
+A unix socket queues about ten, which is why Linux never showed it. The quick
+check: `off --stop-daemon` returns within a second.
+
 **matterlights publishes but nothing arrives.** Compare `RGB_PUBLISH_SOCKET` in
 its `.env` with what `devices` prints. A port another program holds, or one
 Windows has reserved (`netsh int ipv4 show excludedportrange protocol=udp`),

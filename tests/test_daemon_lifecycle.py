@@ -52,6 +52,19 @@ HAS_UNIX_DATAGRAMS = hasattr(socket, "AF_UNIX") and sys.platform != "win32"
 # hardware takes this long and more; an instant fake would hide the ordering.
 SLOW_CLOSE_SECONDS = 0.3
 
+# A tick slower than the publisher's frame interval, and a burst queued behind
+# it. Replaying the burst in order costs BACKLOG * SLOW_WRITE_SECONDS (4 s);
+# skipping to the newest frame costs about one write.
+SLOW_WRITE_SECONDS = 0.1
+BACKLOG = 40
+
+
+def _frame(index: int) -> dict:
+    """A frame whose colour names it: near and far are both ``(50 + index, 0, 0)``."""
+
+    colour = [50 + index, 0, 0]
+    return {**FRAME, "near": colour, "far": colour}
+
 
 def _free_udp_port() -> int:
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -67,16 +80,25 @@ def _udp_config():
 
 
 class _FakeSink:
-    def __init__(self, journal: list | None = None, label: str = "sink", *, close_delay: float = 0.0) -> None:
+    def __init__(
+        self,
+        journal: list | None = None,
+        label: str = "sink",
+        *,
+        close_delay: float = 0.0,
+        write_delay: float = 0.0,
+    ) -> None:
         self.name = label
         self.journal = journal if journal is not None else []
         self.close_delay = close_delay
+        self.write_delay = write_delay
         self.writes: list[tuple] = []
         self.blacks = 0
         self.closed = 0
         self.lit = threading.Event()
 
     def write(self, near, far, palette=None) -> None:
+        time.sleep(self.write_delay)
         self.writes.append((tuple(near), tuple(far)))
         if near != BLACK or far != BLACK:
             self.lit.set()
@@ -118,6 +140,68 @@ class _Running:
         if self.thread.is_alive():
             self.daemon.request_stop("test cleanup")
             self.join()
+
+
+class BacklogTest(unittest.TestCase):
+    """🚨 Only the newest frame matters: the daemon must never replay a queue.
+
+    Measured on the Windows half, 2026-09-11: the case ran minutes behind the
+    screen while the bulbs, fed by the same publisher, kept up. Each tick read
+    ONE datagram -- the oldest waiting -- and then spent longer writing the
+    hardware than matterlights takes between frames, so frames piled up in the
+    socket's receive buffer (64 KB on Windows, some 180 frames) and were played
+    back in order. A stop command sent into it at 02:05:13 had still not been
+    honoured eight minutes later -- queued behind the frames or dropped from a
+    full buffer. A unix datagram socket caps its queue at about ten and the
+    sender drops the rest, which is why Linux never showed it.
+    """
+
+    def setUp(self) -> None:
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+        self.config = _udp_config()
+        self.endpoint = self.config.endpoint
+        self.sink = _FakeSink(write_delay=SLOW_WRITE_SECONDS)
+        self.running = _Running(self.config, [self.sink]).start()
+        self.addCleanup(self.running.stop)
+
+    def _queue_a_backlog(self) -> None:
+        # One frame first, so the daemon is busy with a slow write when the
+        # burst lands and has to find it waiting in the socket afterwards.
+        send(self.endpoint, json.dumps(_frame(1)).encode("utf-8"))
+        self.assertTrue(self.sink.lit.wait(WAIT), "the first frame never reached a sink")
+        for index in range(2, BACKLOG + 1):
+            send(self.endpoint, json.dumps(_frame(index)).encode("utf-8"))
+
+    def test_a_backlog_is_skipped_to_the_newest_frame(self) -> None:
+        self._queue_a_backlog()
+        newest = tuple(_frame(BACKLOG)["near"])
+        deadline = time.monotonic() + WAIT
+        while time.monotonic() < deadline and newest not in [near for near, _far in self.sink.writes]:
+            time.sleep(0.02)
+        written = [near for near, _far in self.sink.writes]
+        self.assertIn(newest, written, "the newest frame never reached the sink")
+        replayed = {near for near in written[: written.index(newest)]} - {BLACK, tuple(_frame(1)["near"])}
+        self.assertLessEqual(
+            len(replayed), 3, f"{len(replayed)} stale frames were written before the newest one"
+        )
+
+    def test_a_stop_queued_behind_a_backlog_is_honoured_without_replaying_it(self) -> None:
+        """The shutdown task's stop joins the same queue as the frames.
+
+        Replayed in order it waited behind minutes of stale colour -- far past the
+        task's one-minute limit, with the soundbar's COM port still held.
+        """
+
+        self._queue_a_backlog()
+        started = time.monotonic()
+        send(self.endpoint, STOP_COMMAND)
+        self.assertTrue(self.running.join(), "still running: the stop is waiting behind the backlog")
+        self.assertLess(
+            time.monotonic() - started,
+            BACKLOG * SLOW_WRITE_SECONDS / 2,
+            "the stop was honoured only after the backlog had been replayed",
+        )
 
 
 class LifecycleTest(unittest.TestCase):

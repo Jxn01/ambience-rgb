@@ -62,6 +62,16 @@ RECEIVE_TIMEOUT_SECONDS = 0.5
 # publisher well before anyone wonders why the colour is frozen.
 STALE_AFTER_SECONDS = 10.0
 
+# The most datagrams one tick will take off the socket. A tick keeps only the
+# newest frame (see Daemon._receive), so this only bounds a flood: a publisher
+# sending faster than this cannot hold a tick forever. 256 frames is more than
+# Windows' whole 64 KB UDP receive buffer, so one tick can always empty it.
+MAX_DATAGRAMS_PER_TICK = 256
+
+# "No datagram was waiting" -- distinct from None, which is a datagram that was
+# not a frame (a command, or garbage).
+_NOTHING = object()
+
 # The publisher's payload version this daemon understands.
 SUPPORTED_PAYLOAD_VERSION = 2
 
@@ -168,14 +178,64 @@ class Daemon:
     # -- socket ------------------------------------------------------------
 
     def _receive(self) -> dict | None:
+        """The NEWEST frame waiting, with every command on the way acted on.
+
+        🚨 **Never one datagram per tick.** A frame is absolute state, worthless
+        the moment a newer one exists -- yet this used to take exactly one per
+        tick, the OLDEST waiting, and write the hardware before taking the next.
+        Whenever a tick outlasted the publisher's frame interval, frames piled up
+        in the socket and were played back in order. On Windows, whose UDP
+        receive buffer holds 64 KB -- some 180 frames -- the case ran minutes
+        behind the screen (2026-09-11), and a stop command sent into that socket
+        had still not been honoured eight minutes later: queued behind the
+        frames, or dropped from a full buffer, and either way the shutdown task
+        could not have stopped the daemon. A unix datagram socket caps its queue
+        at about ten and the sender drops the rest, which is why Linux never
+        showed it.
+
+        So: wait up to the receive timeout for the first datagram, then take
+        everything already queued without waiting, keeping only the newest
+        frame. A stop found on the way ends the drain at once, and the drain is
+        bounded so that a flood cannot hold a tick forever.
+        """
+
+        assert self._socket is not None
+        latest = self._receive_one()
+        if latest is _NOTHING:
+            return None
+        previous_timeout = self._socket.gettimeout()
+        self._socket.settimeout(0.0)
+        try:
+            for _ in range(MAX_DATAGRAMS_PER_TICK):
+                if self._stop.is_set():
+                    break
+                datagram = self._receive_one()
+                if datagram is _NOTHING:
+                    break
+                if datagram is not None:
+                    latest = datagram
+        finally:
+            # A zero timeout left behind would turn every later wait into a
+            # busy loop.
+            self._socket.settimeout(previous_timeout)
+        return latest
+
+    def _receive_one(self):
+        """One datagram: its frame, None when it was not a frame, _NOTHING when none waited.
+
+        A command is acted on here, wherever in a drain it turns up.
+        """
+
         assert self._socket is not None
         try:
             data = self._socket.recv(65535)
-        except TimeoutError:
-            return None
+        except (TimeoutError, BlockingIOError):
+            # TimeoutError: the blocking wait ran out. BlockingIOError: the
+            # non-blocking drain found the socket empty. Both mean "nothing".
+            return _NOTHING
         except OSError as error:
             self._logger.warning("Receive failed: %s", error)
-            return None
+            return _NOTHING
         try:
             payload = json.loads(data.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):

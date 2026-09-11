@@ -721,6 +721,9 @@ boot wrote back:
   (pump 29 LEDs, fans 8/8/8), the Katana V2X on `COM3`, and the exact
   `RGB_PUBLISH_SOCKET` line. The Katana's AES unlock works there too: text mode
   to binary in 0.22 s.
+- `tests\integration\check_hardware.py`, with the owner watching: red, green,
+  blue and white held in order on the AIO pump and fans, and then on the
+  soundbar's light bar -- the only evidence that counts for those two devices.
 - matterlights, pulled, drives the case over UDP, and its two tasks -- once its
   pulled `scripts\install-autostart.ps1` has run -- execute `pythonw.exe` with
   `ExecutionTimeLimit` `PT0S`: no console window, no 72-hour limit. Run only the
@@ -739,11 +742,10 @@ boot wrote back:
 
 **Still needs Windows:**
 
-1. `tests\integration\check_hardware.py`: eyes on the AIO and the soundbar.
-2. A logoff blacks everything -- the session-end window.
-3. `Start-ScheduledTask -TaskName ambience-rgb-lights-off`, from an elevated
+1. A logoff blacks everything -- the session-end window.
+2. `Start-ScheduledTask -TaskName ambience-rgb-lights-off`, from an elevated
    shell, blacks everything without a reboot; then a real restart does.
-4. After that restart, `netsh int ipv4 show excludedportrange protocol=udp` still
+3. After that restart, `netsh int ipv4 show excludedportrange protocol=udp` still
    does not cover 45731: Hyper-V and WSL reserve their ranges at boot.
 
 ## Development

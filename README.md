@@ -26,9 +26,10 @@ works unchanged.
 
 You will need **matterlights** running, since this program deliberately does not
 capture the screen itself. It runs on **Linux and Windows**: one codebase, one
-config file, an installer for each. The Windows half is built and tested from
-Linux but has **not yet run on Windows** -- what still needs that is listed under
-*Windows: what is verified, and what is not*, and the port's reasoning is in
+config file, an installer for each. The Windows half was built and tested from
+Linux and first ran on Windows on 2026-09-11 -- what that boot verified, and the
+little still open, is under *Windows: what is verified, and what is not*, and
+the port's reasoning is in
 [docs/specs/2026-09-10-devices-and-windows-research.md](docs/specs/2026-09-10-devices-and-windows-research.md).
 
 The design reasoning is in
@@ -643,7 +644,7 @@ Researched 2026-09-10, written up in
 |---|---|
 | **Ducky One 3 TKL RGB** | **Ruled out.** Its RGB is onboard-only — no host lighting software exists, so there is nothing to capture and no protocol to speak. The vendor HID interface is for firmware. All the open-source prior art targets the One **2**, a different vendor ID. |
 | **Sound Blaster Katana V2X** | **Driven since 2026-09-10** — see *The Katana driver*. Live on Linux; on Windows it is `COM3` through the inbox `usbser` driver, and the same code opens it there — the most portable device in the project, needing no OpenRGB server and no HID. ⚠️ If you own one, hold off on firmware `1.30.260813.1100`: it post-dates the published protocol and nobody has checked it. |
-| **Windows** | **Built 2026-09-10; not yet run there**, though its whole suite passes on Windows CPython under Wine. See the next section. |
+| **Windows** | **Built 2026-09-10; first ran there 2026-09-11** -- installed, its suite green on Windows itself, and verified on the real hardware; a logoff, the shutdown task and a restart are still to check. See the next section. |
 
 ## Windows: what is verified, and what is not
 
@@ -687,37 +688,52 @@ and keeping off the held devices; `check_policy.py` **10/10** through
 matterlights' own publisher over UDP; `off --stop-daemon` stopping it with exit
 0, the endpoint freed, and its own black written after the daemon let go.
 
-**Needs Windows -- the first boot there should check, in this order:**
+**Verified on Windows itself, 2026-09-11** -- the first boot there, worked
+through from a handoff; the evidence for every item is in the results file that
+boot wrote back:
 
-1. `scripts\windows\install.ps1` runs clean from an elevated PowerShell, and all
-   three tasks appear in Task Scheduler.
-2. The unit suite, `.venv\Scripts\python -m unittest discover -s tests` in the
-   repository. Green on Windows CPython under Wine; never yet on Windows
-   itself, with its real sockets and `user32` -- and with PowerShell 7 on
-   `PATH`, the task XML is rendered there too.
-3. OpenRGB on Windows: whether `--server --server-host 127.0.0.1` starts it
-   without a window, whether the elevated task reaches SMBus (RAM, GPU), whether
-   its controller names still match the config's substrings, and whether
-   `%APPDATA%\OpenRGB\OpenRGB.json` is really where it keeps its settings.
-4. Nothing else drives the Commander Core: iCUE's `CorsairService` and
-   `SignalRgb.Service` stopped and disabled (`-DisableCompetitors`).
-5. `devices` with the daemon stopped: the Commander Core found through Windows'
-   hidapi, the Katana on `COM3`.
-6. `tests\integration\check_hardware.py`: eyes on the AIO and the soundbar.
-7. matterlights, pulled and restarted with `RGB_PUBLISH_SOCKET=udp://127.0.0.1:45731`,
-   drives the case. Re-run its `scripts\install-autostart.ps1` after the pull,
-   from an elevated shell: its two tasks carry Task Scheduler's 72-hour limit,
-   and only the pulled script registers them the way they were fixed by hand on
-   2026-07-19 -- `pythonw.exe`, no console window. The copy from before the pull
-   would have put a terminal window back at every logon. Afterwards the tasks'
-   `Actions.Execute` ends in `pythonw.exe` and `Settings.ExecutionTimeLimit`
-   reads `PT0S`.
-8. A logoff blacks everything -- the session-end window.
-9. `Start-ScheduledTask -TaskName ambience-rgb-lights-off` blacks everything
+- `scripts\windows\install.ps1 -DisableCompetitors` runs clean from an elevated
+  PowerShell -- twice, the second time to pin OpenRGB's swaps -- and registers
+  all three tasks: the daemon under `pythonw` as the user, OpenRGB elevated,
+  both with `PT0S`, and the shutdown task as SYSTEM with `PT1M`.
+- The unit suite on Windows CPython 3.12.10, against its real Winsock and
+  `user32`, a real hidden window, and PowerShell 7 rendering every task's XML:
+  green, and the 11 skips are all unix datagram sockets.
+- OpenRGB 1.0rc3.1, from winget: the elevated task starts it with no window --
+  its exe is a GUI-subsystem binary -- and elevated (token integrity High),
+  serving only `127.0.0.1:6742`, reaching SMBus (the RAM and the GPU), keeping its
+  settings in `%APPDATA%\OpenRGB\OpenRGB.json`, and naming all seven controllers
+  so that every match string in the config matches.
+- Nothing else drives the Commander Core: SignalRGB and iCUE were uninstalled
+  and purged, which goes further than `-DisableCompetitors`.
+- `devices` with the daemon stopped: the Commander Core through Windows' hidapi
+  (pump 29 LEDs, fans 8/8/8), the Katana V2X on `COM3`, and the exact
+  `RGB_PUBLISH_SOCKET` line. The Katana's AES unlock works there too: text mode
+  to binary in 0.22 s.
+- matterlights, pulled, drives the case over UDP, and its two tasks -- once its
+  pulled `scripts\install-autostart.ps1` has run -- execute `pythonw.exe` with
+  `ExecutionTimeLimit` `PT0S`: no console window, no 72-hour limit. Run only the
+  pulled copy; the one from before would put a terminal window back at every
+  logon.
+- `off --stop-daemon` stops a running daemon in about half a second, blacking
+  every sink and releasing `COM3`. `Stop-ScheduledTask -TaskName ambience-rgb`
+  does not: it kills the daemon with no black -- the case keeps its last colours
+  -- and Task Scheduler does not restart it, because its restart-on-failure does
+  not count a user's stop as a failure.
+- `netsh int ipv4 show excludedportrange protocol=udp` does not cover 45731.
+- Found only there, and fixed: the case running tens of seconds to minutes
+  behind (see *Troubleshooting*), a Commander Core drain that cost 15.5 ms a
+  read, and red and green swapped on the board's addressable headers (see *Red
+  and green are swapped on some zones*).
+
+**Still needs Windows:**
+
+1. `tests\integration\check_hardware.py`: eyes on the AIO and the soundbar.
+2. A logoff blacks everything -- the session-end window.
+3. `Start-ScheduledTask -TaskName ambience-rgb-lights-off` blacks everything
    without a reboot; then a real restart does.
-10. Whether `Stop-ScheduledTask -TaskName ambience-rgb` is graceful (probably not)
-    and whether a killed daemon is restarted (it is not expected to be).
-11. `netsh int ipv4 show excludedportrange protocol=udp` does not cover 45731.
+4. After that restart, `netsh int ipv4 show excludedportrange protocol=udp` still
+   does not cover 45731: Hyper-V and WSL reserve their ranges at boot.
 
 ## Development
 

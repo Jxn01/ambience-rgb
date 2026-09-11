@@ -7,7 +7,7 @@ One is ruled out, and the other two have since been built.
 |---|---|---|
 | Ducky One 3 TKL RGB | **Ruled out** — no host lighting protocol exists to speak | High |
 | Sound Blaster Katana V2X | **Built, 2026-09-10, and live on Linux** — reverse-engineered by someone else; our firmware is the exact tested version; Windows binds it to inbox `usbser` as COM3 | High |
-| Windows port | **Built, 2026-09-10; not yet run on Windows** — small hostile surface, pattern already proven next door; see §3 | Moderate, until it has run there |
+| Windows port | **Built, 2026-09-10; not yet run on Windows** (first ran there 2026-09-11 -- see the execution log) — small hostile surface, pattern already proven next door; see §3 | Moderate, until it has run there |
 
 ---
 

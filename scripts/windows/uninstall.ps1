@@ -5,9 +5,12 @@
 .DESCRIPTION
     The Windows twin of scripts/uninstall.sh. It leaves the repository, the
     venv and OpenRGB's settings alone: the Commander Core detectors stay off,
-    so turn them back on in OpenRGB to let it see the AIO again. A service
-    that install.ps1 -DisableCompetitors disabled stays disabled; the install
-    printed how to undo each one.
+    so turn them back on in OpenRGB to let it see the AIO again, and the
+    red/green swaps the config pinned stay on -- with OpenRGB closed, delete
+    the "ASRock Polychrome USB" section from OpenRGB.json and it writes its
+    own defaults at its next start. A service that install.ps1
+    -DisableCompetitors disabled stays disabled; the install printed how to
+    undo each one.
 
     Run it from an elevated PowerShell: removing the SYSTEM task needs it.
 #>
@@ -39,4 +42,4 @@ foreach ($name in @($AmbienceDaemonTask, $AmbienceShutdownTask, $AmbienceOpenRgb
     }
 }
 
-Write-Host "Removed. OpenRGB's Commander Core detectors are still off; turn them back on in OpenRGB if you want it to see the AIO again."
+Write-Host "Removed. OpenRGB's Commander Core detectors are still off; turn them back on in OpenRGB if you want it to see the AIO again. The red/green swaps the config pinned are still on: with OpenRGB closed, delete the 'ASRock Polychrome USB' section from OpenRGB.json to go back to its defaults."

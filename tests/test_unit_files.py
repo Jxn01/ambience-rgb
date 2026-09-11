@@ -111,6 +111,23 @@ class InstallerTest(unittest.TestCase):
             with self.subTest(placeholder=placeholder):
                 self.assertIn(f"s|{placeholder}|", installer)
 
+    def test_our_openrgb_is_stopped_before_its_settings_are_edited(self) -> None:
+        """🚨 OpenRGB reads ``OpenRGB.json`` once, while it detects devices, and
+        writes the whole file back from memory whenever it saves a setting --
+        and ``enable --now`` does not restart a unit that is already running.
+        So the installer stops ours before the edit, and ``enable --now``
+        starts it again after.
+        """
+
+        installer = (UNITS.parent / "scripts" / "install.sh").read_text(encoding="utf-8")
+        code = "\n".join(line for line in installer.splitlines() if not line.lstrip().startswith("#"))
+        stop = code.find("systemctl --user stop ambience-rgb-openrgb.service")
+        self.assertNotEqual(stop, -1, "install.sh never stops its OpenRGB before editing its settings")
+        edit = code.index("-m ambience_rgb.openrgb_settings")
+        start = code.index("systemctl --user enable --now ambience-rgb-openrgb.service")
+        self.assertLess(stop, edit)
+        self.assertLess(edit, start)
+
 
 class PlaceholderTest(unittest.TestCase):
     def test_every_unit_uses_the_install_dir_placeholder(self) -> None:

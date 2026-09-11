@@ -108,8 +108,9 @@ def main() -> int:
         # therefore failed 6 of 10 against a daemon that was behaving perfectly.
         # An integration check that has drifted from the code accuses the rig.
         for index, zone, group, order, colours in _observed(reader, plan):
-            # 🚨 And the LAST stage: some zones are not wired RGB. This board
-            # drives IO Cover and PCB as GRB, so the bytes that reach them are a
+            # 🚨 And the LAST stage: some zones are not sent RGB. This board's
+            # IO Cover and PCB are sent GRB, undoing the red/green swap OpenRGB
+            # makes on them, so the colours the server holds for them are a
             # permutation of the colour. Comparing against unpermuted values
             # fails on exactly those two zones and looks like a colour bug --
             # which is precisely how the original GRB fault presented.

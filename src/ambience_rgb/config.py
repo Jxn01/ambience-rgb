@@ -84,12 +84,25 @@ class DeviceRule:
     bus: str = BUS_USB
     zones: dict[str, str] = field(default_factory=dict)
     channel_order: str = "RGB"
-    """The order this device's outputs are wired, e.g. ``"GRB"``."""
+    """The order to send this device's channels in, e.g. ``"GRB"``: which of our
+    channels drives each of its outputs, after anything OpenRGB does to them."""
     zone_channel_order: dict[str, str] = field(default_factory=dict)
-    """Per-zone overrides, because one controller can wire zones differently.
+    """Per-zone overrides, because one controller can treat zones differently.
 
-    The ASRock X870E Taichi drives its addressable headers as RGB and its own
-    onboard LEDs as GRB. Same device, same write, two orders.
+    On the ASRock X870E Taichi, OpenRGB swaps red and green on IO Cover and PCB
+    -- the board's own table asks it to -- and there that swap turns red into
+    green, so the config swaps them back with ``"GRB"``. That holds only while
+    OpenRGB's swap does, which is why ``openrgb_rg_swap`` pins it.
+    """
+    openrgb_rg_swap: tuple[str, ...] = ()
+    """Zones whose red/green swap OpenRGB is made to do, through ``OpenRGB.json``.
+
+    The installers write these into OpenRGB's ``ASRock Polychrome USB`` /
+    ``RGSwap`` settings -- the one per-zone swap OpenRGB exposes -- with
+    ``ambience_rgb.openrgb_settings``, and the names must be OpenRGB's zone
+    names exactly. 🚨 A list, not a table of booleans: OpenRGB swaps a zone
+    when the board's table OR the setting says so, so a setting can force the
+    swap on and never off. Empty leaves OpenRGB's settings alone.
     """
     static: tuple[int, int, int] | None = None
     """A fixed colour to set once per connection, instead of syncing.
@@ -210,6 +223,20 @@ def _validate_order(value, where: str) -> str:
             f"{where}.channel_order must be a permutation of RGB, got {value!r}"
         )
     return order
+
+
+def _validate_zone_list(value, where: str) -> tuple[str, ...]:
+    # A list, never a table: OpenRGB's setting can force a swap on but not off,
+    # so a table's `false` would do nothing, silently. And never a plain
+    # string, which would iterate as its characters.
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ConfigError(f'{where} must be a list of zone names, e.g. ["IO Cover", "PCB"], got {value!r}')
+    for name in value:
+        if not isinstance(name, str) or not name.strip():
+            raise ConfigError(f"{where} must hold zone names, got {name!r}")
+    return tuple(name.strip() for name in value)
 
 
 def _number(value, where: str) -> float:
@@ -460,6 +487,7 @@ def parse_config(
                     str(name): _validate_order(order, f"{where}.zone_channel_order[{name!r}]")
                     for name, order in (entry.get("zone_channel_order") or {}).items()
                 },
+                openrgb_rg_swap=_validate_zone_list(entry.get("openrgb_rg_swap"), f"{where}.openrgb_rg_swap"),
             )
         )
 

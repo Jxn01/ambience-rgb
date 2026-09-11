@@ -85,18 +85,21 @@ _CHANNEL_INDEX = {"R": 0, "G": 1, "B": 2}
 
 
 def apply_channel_order(colour: RGB, order: str) -> RGB:
-    """Reorder our ``(r, g, b)`` into the order a device actually wires.
+    """Reorder our ``(r, g, b)`` into the order a zone needs to be sent in.
 
-    🚨 **Not every zone on a controller is wired the same way.** On this rig the
-    ASRock X870E Taichi drives its addressable fan headers as RGB and its own
-    onboard IO-cover and PCB LEDs as **GRB** -- same OpenRGB device, same write,
-    two different orders. Verified by sending pure primaries and looking: red
-    showed green, green showed red, blue showed blue.
+    🚨 **Not every zone on a controller comes out the same way.** On this rig
+    OpenRGB swaps red and green on the ASRock X870E Taichi's IO Cover and PCB --
+    the board's own table asks it to, and ``openrgb_rg_swap`` pins it -- and on
+    those two zones the swap turns red into green. So they are sent **GRB**,
+    which swaps them back, while the addressable headers on the same OpenRGB
+    device, in the same write, are sent as they are. Verified by sending pure
+    primaries and looking: red showed green, green showed red, blue showed blue.
 
     That is why the option is per ZONE and not per device, and it is why the
     symptom was so confusing: a pink screen at ``(255, 0, 96)`` came out
     ``(0, 255, 96)``, a vivid green-cyan, on two zones while every other zone in
-    the case showed the correct pink.
+    the case showed the correct pink. The two swaps must move together; see
+    ``openrgb_rg_swap`` in ``config.py``.
 
     ``order`` names which of our channels drives each of the device's outputs,
     so ``"GRB"`` means "this device's first output is green".

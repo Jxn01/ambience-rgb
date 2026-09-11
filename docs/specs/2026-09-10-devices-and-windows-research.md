@@ -310,6 +310,14 @@ at logoff, which that code already accounts for.
 property of the board's wiring and carries over unchanged in config. The
 integration checks work anywhere the daemon runs.
 
+> **Corrected 2026-09-11, on the first Windows boot:** the GRB fix is *not* a
+> property of the board's wiring alone. Half of it is an OpenRGB setting -- the
+> per-zone `RGSwap` in `OpenRGB.json`, which OpenRGB ORs with the board's own
+> table -- and on Windows that setting started with the addressable headers off,
+> so they showed green for red. The config now carries both halves side by side
+> (`zone_channel_order` and `openrgb_rg_swap`) and the installers pin OpenRGB's.
+> See the execution log, *2026-09-11: the first boot on Windows*.
+
 ### Shape of the work
 
 Follow matterlights exactly: a package-per-concern with a dispatching

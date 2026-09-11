@@ -80,11 +80,26 @@ bold "Installed ambience-rgb into the venv"
 # detector on, nothing errors and the colours never apply.
 # --------------------------------------------------------------------------
 # The edit lives in ambience_rgb.openrgb_settings, shared with the Windows
-# installer. It backs the file up before changing it, leaves it byte-for-byte
-# alone when both detectors are already off, and creates it when OpenRGB has
-# never run -- so OpenRGB's first run starts with them off, whenever it happens.
+# installer: the Commander Core detectors off, and the red/green swap on for
+# every zone the config lists in openrgb_rg_swap. It backs the file up before
+# changing it, leaves it byte-for-byte alone when nothing needs changing, and
+# creates it when OpenRGB has never run -- so OpenRGB's first run starts from
+# these settings, whenever it happens.
+#
+# OpenRGB reads the file once, as it detects devices, and writes the whole of it
+# back from memory whenever it saves a setting: an edit made while it runs does
+# not apply until it restarts, and can be overwritten before then. So our unit
+# is stopped for the edit, and `enable --now` below starts it again. An OpenRGB
+# running any other way is reported, not touched.
+if systemctl --user is-active --quiet ambience-rgb-openrgb.service; then
+    systemctl --user stop ambience-rgb-openrgb.service
+    echo "  stopped ambience-rgb-openrgb.service for the edit; it starts again below"
+fi
+if pgrep -x openrgb >/dev/null; then
+    warn "  OpenRGB is running outside ambience-rgb-openrgb.service (pid $(pgrep -x openrgb | tr '\n' ' ')). It reads these settings only when it starts, and can write them back from memory: close it now, and start it again after this."
+fi
 "$VENV/bin/python" -m ambience_rgb.openrgb_settings "$OPENRGB_CONFIG" \
-    || warn "  Could not update $OPENRGB_CONFIG; disable OpenRGB's Corsair Commander Core detectors by hand."
+    || warn "  $OPENRGB_CONFIG was not fully updated; see above. Without it OpenRGB may take the Commander Core, and zones the config swaps back may show red as green."
 
 # CoolerControl is the second contender, and it arrives silently. Its liquidctl
 # integration defaults to ON but does nothing while liquidctl is absent -- so it

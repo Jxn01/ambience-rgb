@@ -123,6 +123,21 @@ class InstallerTest(unittest.TestCase):
         self.assertIn("ambience_rgb.openrgb_settings", self.text)
         self.assertNotIn("ConvertTo-Json", code(self.text), "its default depth of 2 flattens OpenRGB.json")
 
+    def test_our_openrgb_is_stopped_before_its_settings_are_edited(self) -> None:
+        """🚨 OpenRGB reads ``OpenRGB.json`` once, while it detects devices, and
+        writes the whole file back from memory whenever it saves a setting. An
+        edit made while it runs does not apply until it restarts, and can be
+        overwritten before then. Step 6 starts the task again; this is the stop.
+        """
+
+        text = code(self.text)
+        calls = [
+            match.start()
+            for match in re.finditer(r"^\s*(\$\w+\s*=\s*)?Stop-AmbienceOpenRgb\s*$", text, flags=re.M)
+        ]
+        self.assertTrue(calls, "install.ps1 never calls Stop-AmbienceOpenRgb")
+        self.assertLess(min(calls), text.index("-m ambience_rgb.openrgb_settings"))
+
     def test_it_requires_elevation(self) -> None:
         self.assertIn("WindowsBuiltInRole]::Administrator", self.text)
 

@@ -427,5 +427,82 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertNotIn("systemctl", windows)
 
 
+class OpenRgbRgSwapTest(unittest.TestCase):
+    """``openrgb_rg_swap``: the zones whose red/green swap OpenRGB is made to do.
+
+    🚨 Two layers swap red and green on an ASRock Polychrome board, and they
+    must move together. OpenRGB swaps a zone when the board's own table OR its
+    settings file says so -- ``rgswap = table_bit || setting`` in
+    ``PolychromeUSBController::SetDeviceInfo`` -- so the file can force a swap
+    on and never off. ``zone_channel_order`` is the other layer. The installers
+    write this list into ``OpenRGB.json``; see ``ambience_rgb.openrgb_settings``.
+    """
+
+    def test_it_is_a_list_of_zone_names(self) -> None:
+        rule = parse_config(
+            {**MINIMAL, "devices": [{"match": "x", "openrgb_rg_swap": ["IO Cover", "PCB"]}]}
+        ).devices[0]
+        self.assertEqual(rule.openrgb_rg_swap, ("IO Cover", "PCB"))
+
+    def test_no_list_means_no_pin(self) -> None:
+        # No rule, no pin: another board's OpenRGB settings are not ours to change.
+        rule = parse_config({**MINIMAL, "devices": [{"match": "x"}]}).devices[0]
+        self.assertEqual(rule.openrgb_rg_swap, ())
+
+    def test_a_table_of_booleans_is_refused(self) -> None:
+        """There is no "off" to pin, so a ``false`` would do nothing, silently."""
+
+        with self.assertRaises(ConfigError) as caught:
+            parse_config({**MINIMAL, "devices": [{"match": "x", "openrgb_rg_swap": {"PCB": False}}]})
+        self.assertIn("list", str(caught.exception))
+
+    def test_anything_but_zone_names_is_refused(self) -> None:
+        # A plain string would iterate as its characters.
+        for value in ("PCB", ["PCB", ""], [1], ["PCB", None]):
+            with self.subTest(value=value):
+                with self.assertRaises(ConfigError):
+                    parse_config({**MINIMAL, "devices": [{"match": "x", "openrgb_rg_swap": value}]})
+
+    def test_every_zone_the_shipped_config_swaps_back_is_one_openrgb_swaps(self) -> None:
+        """🚨 The pairing guard: a zone swapped back must be one OpenRGB swaps.
+
+        The board's table marks IO Cover and PCB as swapped, so OpenRGB swaps
+        them and the config's ``GRB`` swaps them back -- but only while
+        OpenRGB's swap holds, and the table is nothing to lean on: OpenRGB
+        itself writes zeros into it on entering Direct mode. Pinned in
+        ``OpenRGB.json``, the swap holds on every OpenRGB and every boot. A
+        ``GRB`` without the pin comes out swapped once wherever the table reads
+        clear: green for red.
+        """
+
+        config = load_config(SHIPPED)
+        swapped_back = [
+            (rule, zone)
+            for rule in config.devices
+            for zone, order in rule.zone_channel_order.items()
+            if order == "GRB"
+        ]
+        self.assertTrue(swapped_back, "the shipped config swaps no zone back; this guard checks nothing")
+        for rule, zone in swapped_back:
+            with self.subTest(device=rule.match, zone=zone):
+                self.assertIn(zone, rule.openrgb_rg_swap)
+
+    def test_the_shipped_board_pins_its_onboard_zones_and_its_addressable_headers(self) -> None:
+        """The five zones this rig needs OpenRGB to swap.
+
+        IO Cover and PCB pair with their ``GRB``. The three addressable headers
+        need OpenRGB's swap and nothing else: on the first Windows boot, with
+        OpenRGB's default of off, raw red came out green on every one of them.
+        PCH and the two 12 V RGB headers are left to OpenRGB -- none of them was
+        ever checked by eye.
+        """
+
+        rule = load_config(SHIPPED).rule_for("ASRock X870E Taichi")
+        self.assertEqual(
+            set(rule.openrgb_rg_swap),
+            {"IO Cover", "PCB", "Addressable Header 1", "Addressable Header 2", "Addressable Header 3/Audio"},
+        )
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

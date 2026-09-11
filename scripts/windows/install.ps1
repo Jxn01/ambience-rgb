@@ -12,9 +12,11 @@
        Windows the hid binding comes from pip (the package "hidapi", which is
        cython-hidapi). That is the exact opposite of the Linux rule, where pip
        must never be allowed near it.
-    2. Turns OpenRGB's Commander Core detectors off, creating OpenRGB's
-       settings file when OpenRGB has never run -- with the same Python code
-       install.sh runs.
+    2. Sets what ambience-rgb needs in OpenRGB's settings -- the Commander
+       Core detectors off, and the red/green swap on for the zones the config
+       lists in openrgb_rg_swap -- with the same Python code install.sh runs,
+       creating the file when OpenRGB has never run. Its OpenRGB task is
+       stopped for the edit: OpenRGB reads the file only when it starts.
     3. Reports other software that would fight for the same devices -- iCUE's
        Corsair Service, SignalRGB -- and with -DisableCompetitors stops and
        disables their services.
@@ -86,6 +88,37 @@ function Restart-AmbienceTask([string]$Name) {
     Start-ScheduledTask -TaskName $Name
 }
 
+function Stop-AmbienceOpenRgb {
+    # OpenRGB reads OpenRGB.json once, as it detects devices, and writes the
+    # whole file back from memory whenever it saves a setting: an edit made
+    # while it runs does not apply until it restarts, and can be overwritten
+    # before then. So our task is stopped for the edit -- step 6 starts it
+    # again -- and an OpenRGB running any other way is reported, not touched.
+    # Returns whether it stopped the task.
+    $stopped = $false
+    if (-not $NoOpenRgbTask) {
+        $task = Get-ScheduledTask -TaskName $AmbienceOpenRgbTask -ErrorAction SilentlyContinue
+        if ($null -ne $task -and "$($task.State)" -eq "Running") {
+            Stop-ScheduledTask -TaskName $AmbienceOpenRgbTask -ErrorAction SilentlyContinue
+            $stopped = $true
+        }
+    }
+    # Stopping the task ends the process without waiting for it to be gone.
+    for ($i = 0; $stopped -and $i -lt 50; $i++) {
+        if (-not (Get-Process -Name OpenRGB -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 200
+    }
+    if ($stopped) {
+        Write-Host "  stopped $AmbienceOpenRgbTask for the edit; step 6 starts it again"
+    }
+    $running = @(Get-Process -Name OpenRGB -ErrorAction SilentlyContinue)
+    if ($running.Count -gt 0) {
+        $ids = ($running | ForEach-Object { $_.Id }) -join ", "
+        Write-Caution "  OpenRGB is running outside the $AmbienceOpenRgbTask task (process $ids). It reads these settings only when it starts, and can write them back from memory: close it now, and start it again after this."
+    }
+    return $stopped
+}
+
 # -----------------------------------------------------------------------------
 # 0. Elevation, and whose tasks these are
 # -----------------------------------------------------------------------------
@@ -128,16 +161,18 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host ("  " + (Get-VenvValue "import sys; print(sys.version.split()[0])") + " in $venv")
 
 # -----------------------------------------------------------------------------
-# 2. OpenRGB's Commander Core detectors
+# 2. OpenRGB's settings
 # -----------------------------------------------------------------------------
 Write-Step "2. OpenRGB settings"
-# The same Python code install.sh runs. It backs the file up before changing
-# it, and creates it when OpenRGB has never run -- so OpenRGB's first run
-# starts with the Commander Core detectors already off.
+# The same Python code install.sh runs: the Commander Core detectors off, and
+# the red/green swap on for every zone the config lists in openrgb_rg_swap. It
+# backs the file up before changing it, and creates it when OpenRGB has never
+# run -- so OpenRGB's first run starts from these settings.
+$openRgbStopped = Stop-AmbienceOpenRgb
 $openRgbSettings = Join-Path $env:APPDATA "OpenRGB\OpenRGB.json"
 & $python -m ambience_rgb.openrgb_settings $openRgbSettings
 if ($LASTEXITCODE -ne 0) {
-    Write-Caution "  Could not update $openRgbSettings. Turn off OpenRGB's Corsair Commander Core detectors by hand."
+    Write-Caution "  $openRgbSettings was not fully updated; see above. Without it OpenRGB may take the Commander Core, and zones the config swaps back may show red as green."
 }
 
 # -----------------------------------------------------------------------------
@@ -253,6 +288,11 @@ Write-Host "  registered $AmbienceShutdownTask"
 
 if (-not $NoOpenRgbTask) {
     Restart-AmbienceTask $AmbienceOpenRgbTask
+} elseif ($openRgbStopped) {
+    # Stopped for the settings edit in step 2, and then OpenRGB.exe was not
+    # found in step 4: start the task that was running rather than leave the
+    # case half dark.
+    Start-ScheduledTask -TaskName $AmbienceOpenRgbTask
 }
 Restart-AmbienceTask $AmbienceDaemonTask
 Write-Host "  started"

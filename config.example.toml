@@ -153,15 +153,22 @@ group = "far"
 bus = "usb"
 zones = { "IO Cover" = "near", "PCB" = "near" }
 
-# 🚨 This board wires its own onboard LEDs differently from the fan headers
-# hanging off the very same controller. Verified by sending pure primaries and
-# looking: IO Cover and PCB show RED when sent green and GREEN when sent red,
-# while every addressable header is correct.
+# 🚨 Red and green are swapped in TWO places for this board, and the two must
+# move together. OpenRGB swaps a zone whenever the board's own table or its
+# settings file says so -- the file can force a swap on, never off -- and with
+# that swap on, red comes out as green on IO Cover and PCB but as red on the
+# addressable headers. So openrgb_rg_swap pins OpenRGB's swap on for all five
+# (the installers write it into OpenRGB.json), and zone_channel_order swaps IO
+# Cover and PCB back. Unpinned, the headers follow the board's table, which
+# OpenRGB itself zeroes on entering Direct mode: on the first Windows boot every
+# header showed green for red.
 #
-# That is why this is per ZONE. The symptom was a pink screen appearing as vivid
-# green-cyan on exactly two zones and correct pink everywhere else, which looks
-# like anything but a wiring order.
+# Verified by sending pure primaries and looking. Per ZONE, because the first
+# symptom was a pink screen showing as vivid green-cyan on exactly two zones and
+# correct pink everywhere else. PCH and the two 12 V RGB headers are left to
+# OpenRGB: none of them has been checked by eye.
 zone_channel_order = { "IO Cover" = "GRB", "PCB" = "GRB" }
+openrgb_rg_swap = ["IO Cover", "PCB", "Addressable Header 1", "Addressable Header 2", "Addressable Header 3/Audio"]
 
 [[devices]]
 match = "Razer Naga"

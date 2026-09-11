@@ -182,10 +182,11 @@ class CohereTest(unittest.TestCase):
 class ChannelOrderTest(unittest.TestCase):
     """🚨 One controller can wire its zones differently from each other.
 
-    Verified on this rig by sending pure primaries and looking: the ASRock
-    X870E Taichi shows RED when sent green and GREEN when sent red on its
-    onboard IO-cover and PCB zones, while its addressable fan headers -- same
-    OpenRGB device, same write -- are correct. So the option is per ZONE.
+    Verified on this rig by sending pure primaries and looking: through the
+    red/green swap OpenRGB makes on the ASRock X870E Taichi's onboard IO-cover
+    and PCB zones -- the board's table asks for it -- those zones show RED when
+    sent green and GREEN when sent red, while its addressable fan headers --
+    same OpenRGB device, same write -- are correct. So the option is per ZONE.
 
     The symptom was a pink screen showing as vivid green-cyan on two zones and
     correct pink everywhere else, which reads as anything but a wiring order.
@@ -202,7 +203,7 @@ class ChannelOrderTest(unittest.TestCase):
 
         wanted = (255, 0, 96)
         sent = apply_channel_order(wanted, "GRB")
-        displayed = (sent[1], sent[0], sent[2])  # what GRB hardware does to it
+        displayed = (sent[1], sent[0], sent[2])  # what the zone, through OpenRGB's swap, does to it
         self.assertEqual(displayed, wanted)
 
     def test_every_permutation_is_a_permutation(self) -> None:

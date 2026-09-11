@@ -106,12 +106,14 @@ scripts/install.sh
 
 It refuses a conda interpreter, checks `hid` is importable, marks the
 distribution Python bindings it uses as explicitly installed (so an orphan sweep
-cannot take them), builds the venv with `--system-site-packages`, disables
-OpenRGB's Commander Core detectors (backing its settings up first, or creating
-them if OpenRGB has never run), installs a udev rule that gives you the Katana's
-serial port and keeps ModemManager off it, then installs three systemd units and
-enables them. The shutdown unit is handed the config file the daemon reads, so
-**re-run it after creating or moving a config**.
+cannot take them), builds the venv with `--system-site-packages`, sets what this
+program needs in OpenRGB's settings -- the Commander Core detectors off and the
+config's `openrgb_rg_swap` zones on, with its OpenRGB unit stopped for the edit,
+backing the file up first or creating it if OpenRGB has never run -- installs a
+udev rule that gives you the Katana's serial port and keeps ModemManager off it,
+then installs three systemd units and enables them. The shutdown unit is handed
+the config file the daemon reads, so **re-run it after creating or moving a
+config**.
 
 Then tell MatterLights to publish, in its `.env` -- `ambience-rgb devices` prints
 the exact line:
@@ -146,12 +148,14 @@ scripts\windows\install.ps1 -DisableCompetitors    # ...and stops and disables i
 | `-NoOpenRgbTask` | Do not register the OpenRGB server task, for running OpenRGB your own way. It must then serve the SDK on the config's host and port. |
 | `-DisableCompetitors` | Stop and disable the services of other RGB software it finds -- iCUE's `CorsairService` and `CorsairDeviceControlService`, `SignalRgb.Service` -- printing how to undo each. Without it they are only reported. |
 
-It builds `.venv` with the `py` launcher and installs the package into it; turns
-OpenRGB's Commander Core detectors off in `%APPDATA%\OpenRGB\OpenRGB.json` with
-the very code `install.sh` runs -- creating the file if OpenRGB has never run,
-so installing OpenRGB *later* cannot bring the conflict back; reports (or
-disables) other RGB software; registers three scheduled tasks and starts two;
-and prints the `.env` line matterlights needs:
+It builds `.venv` with the `py` launcher and installs the package into it; sets
+what this program needs in `%APPDATA%\OpenRGB\OpenRGB.json` with the very code
+`install.sh` runs -- the Commander Core detectors off and the config's
+`openrgb_rg_swap` zones on, with its OpenRGB task stopped for the edit, and the
+file created if OpenRGB has never run, so installing OpenRGB *later* cannot
+bring the conflict back; reports (or disables) other RGB software; registers
+three scheduled tasks and starts two; and prints the `.env` line matterlights
+needs:
 
 ```ini
 RGB_EXTENSION_ENABLED=true
@@ -239,6 +243,9 @@ the repo. One file serves both platforms, and says so where they differ.
 | `devices[].bus` | `usb` or `smbus`, selecting which rate applies. |
 | `devices[].zones` | Per-zone group overrides, e.g. `{ "IO Cover" = "near" }`. |
 | `devices[].static` | A fixed colour (`"#rrggbb"` or `[r, g, b]`) set once per connection instead of synced. |
+| `devices[].channel_order` | The order to send the device's channels in: a permutation of `RGB`, any case. `GRB` sends our green where red would go. Default `RGB`; anything that is not a permutation is refused. |
+| `devices[].zone_channel_order` | Per-zone overrides of `channel_order`, e.g. `{ "IO Cover" = "GRB" }`. Zone names match case-insensitively. |
+| `devices[].openrgb_rg_swap` | Zones whose red/green swap OpenRGB is made to do, e.g. `["IO Cover", "PCB"]`, by OpenRGB's exact zone names. The installers write them into OpenRGB's `ASRock Polychrome USB` / `RGSwap` settings -- the one per-zone swap OpenRGB exposes -- with OpenRGB stopped. A list, not a table: OpenRGB swaps a zone when the board's own table *or* the setting says so, so a setting can force the swap on and never off. Empty, the default, leaves OpenRGB's settings alone. It pairs with `zone_channel_order`: see *Red and green are swapped on some zones*. |
 | `colour.saturation` | Push each channel away from the mean of the three. `1.0` disables it. |
 | `colour.gamma` | Spread the channels apart. Raises saturation; does **not** dim a colour already at peak. `1.0` disables it. |
 | `colour.group_cohesion` | Pull the near and far group colours toward each other. `0.0` keeps the engine's intent, `1.0` is one colour everywhere. |
@@ -527,6 +534,22 @@ you are spending.
 zero while the server sits on hundreds of kilobytes unread: the bytes just move
 into its receive buffer. `ss -tnp | grep 6742` and read the *server* side's
 Recv-Q; if it grows, we are overrunning it.
+
+**Red and green are swapped on some zones** -- red shows as green and green as
+red, while blue is right. Two layers swap red and green, and they must agree.
+OpenRGB swaps an ASRock Polychrome zone when the board's own table *or*
+OpenRGB's settings say so -- the setting can force a swap on, never off -- and
+`zone_channel_order` swaps a zone in this program. `openrgb_rg_swap` lists the
+zones whose OpenRGB swap the installers pin on in `OpenRGB.json`; on this rig IO
+Cover and PCB are then swapped back with `GRB`, and the addressable headers come
+out right as they are. So re-run the installer -- it stops OpenRGB, pins the
+swaps and starts it again, since OpenRGB reads its settings only when it starts
+-- and check that `"ASRock Polychrome USB"` / `"RGSwap"` in `OpenRGB.json` holds
+`true` for every zone the config lists. A zone still wrong after that: add it to
+`openrgb_rg_swap`, re-run, send pure red and look; if it is still swapped, give
+it `GRB` in `zone_channel_order` too. The first Windows boot showed every
+addressable header green for red, because OpenRGB's default for them was off
+and nothing pinned it.
 
 **Everything is white.** Expected on a greyscale screen: it is above the dark
 cutoff but carries no saturation, so it normalises to white at full brightness.

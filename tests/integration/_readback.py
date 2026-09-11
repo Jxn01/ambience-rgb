@@ -38,8 +38,8 @@ def expected_colour(config, near, far, group, order: str = "RGB"):
     2. ``treat`` applies saturation and gamma, because a bulb and an LED strip
        showing identical numbers do not look alike;
     3. ``apply_channel_order`` permutes the bytes for zones that are not sent
-       RGB -- this board's *IO Cover* and *PCB* are sent GRB, undoing the
-       red/green swap OpenRGB makes on them (see ``openrgb_rg_swap``).
+       RGB -- the ASRock board's zones are sent GRB, undoing the red/green
+       swap OpenRGB makes on them (see ``openrgb_rg_swap``).
 
     ``check_policy`` modelled only stage 2 and failed 6 of 10 against a daemon
     that was perfectly correct; ``check_failures`` modelled none of them and

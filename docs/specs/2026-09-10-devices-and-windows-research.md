@@ -311,11 +311,13 @@ property of the board's wiring and carries over unchanged in config. The
 integration checks work anywhere the daemon runs.
 
 > **Corrected 2026-09-11, on the first Windows boot:** the GRB fix is *not* a
-> property of the board's wiring alone. Half of it is an OpenRGB setting -- the
-> per-zone `RGSwap` in `OpenRGB.json`, which OpenRGB ORs with the board's own
-> table -- and on Windows that setting started with the addressable headers off,
-> so they showed green for red. The config now carries both halves side by side
-> (`zone_channel_order` and `openrgb_rg_swap`) and the installers pin OpenRGB's.
+> property of the board's wiring alone. Half of it is OpenRGB's red/green swap,
+> which is on for a zone when the board's own table *or* the per-zone `RGSwap`
+> in `OpenRGB.json` says so. On Windows the setting said off for the addressable
+> headers, but the board's bits for them read set, so they were swapped and
+> showed green for red -- where Linux had read those bits clear. The config now
+> carries both halves side by side (`openrgb_rg_swap` pinned on and `GRB` in
+> `zone_channel_order`, for all five zones) and the installers pin OpenRGB's.
 > See the execution log, *2026-09-11: the first boot on Windows*.
 
 ### Shape of the work

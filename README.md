@@ -538,18 +538,20 @@ Recv-Q; if it grows, we are overrunning it.
 **Red and green are swapped on some zones** -- red shows as green and green as
 red, while blue is right. Two layers swap red and green, and they must agree.
 OpenRGB swaps an ASRock Polychrome zone when the board's own table *or*
-OpenRGB's settings say so -- the setting can force a swap on, never off -- and
-`zone_channel_order` swaps a zone in this program. `openrgb_rg_swap` lists the
-zones whose OpenRGB swap the installers pin on in `OpenRGB.json`; on this rig IO
-Cover and PCB are then swapped back with `GRB`, and the addressable headers come
-out right as they are. So re-run the installer -- it stops OpenRGB, pins the
-swaps and starts it again, since OpenRGB reads its settings only when it starts
--- and check that `"ASRock Polychrome USB"` / `"RGSwap"` in `OpenRGB.json` holds
-`true` for every zone the config lists. A zone still wrong after that: add it to
-`openrgb_rg_swap`, re-run, send pure red and look; if it is still swapped, give
-it `GRB` in `zone_channel_order` too. The first Windows boot showed every
-addressable header green for red, because OpenRGB's default for them was off
-and nothing pinned it.
+OpenRGB's settings say so -- the setting can force a swap on, never off, and
+the table is board state that differs between boots -- and `zone_channel_order`
+swaps a zone in this program. The only arrangement that holds on every boot is
+both: the zone in `openrgb_rg_swap`, which the installers pin on in
+`OpenRGB.json`, and `GRB` in `zone_channel_order` if, with that swap on, it
+still shows red as green -- on this rig, all five zones. So check that both keys
+list the zone, re-run the installer (it stops OpenRGB, pins the swaps and starts
+it again; OpenRGB reads its settings only when it starts), confirm that
+`"ASRock Polychrome USB"` / `"RGSwap"` in `OpenRGB.json` holds `true` for it,
+then send pure red and look. 🚨 A probe cannot tell a swap setting that is
+ignored from one that was already on: the first Windows boot showed every
+addressable header green for red although `OpenRGB.json` said `false` -- the
+board's bits for them read set -- and pinning them `true` changed nothing, which
+looked exactly like the setting being ignored.
 
 **Everything is white.** Expected on a greyscale screen: it is above the dark
 cutoff but carries no saturation, so it normalises to white at full brightness.

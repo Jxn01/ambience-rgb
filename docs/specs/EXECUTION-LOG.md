@@ -963,6 +963,61 @@ full screen: "the bulbs and the rgb follows it."
 opens. The Katana is a serial port; its drain waits one 50 ms read slice, but
 only while connecting, never per frame.
 
+### 🚨 A setting that can only force a swap on -- and a probe that could not tell
+
+The owner, watching a test video with both fixes above running: "the
+addressable headers have red and green switched." The shared config had been
+verified on Linux: IO Cover and PCB sent GRB, every header sent as it is.
+
+OpenRGB 1.0rc3.1 keeps a per-zone red/green swap for this board in
+`OpenRGB.json` (`"ASRock Polychrome USB"` / `"RGSwap"`); its first run here had
+written the headers `false` and IO Cover, PCB and PCH `true`. Raw pure red
+through OpenRGB, with no ambience-rgb swap, came out green on the headers and on
+IO Cover and PCB alike. The obvious reading -- the file's `false` is why the
+headers are swapped, so `true` will fix them -- was written up, built as
+`openrgb_rg_swap`, pinned by the installer, checked in the file after OpenRGB's
+restart (all five `true`, the mtime our write) -- and **falsified by eye**: pure
+red, headers still green. Pure blue came out blue, so the headers were being
+driven. The pin had simply changed nothing.
+
+OpenRGB's source, fetched at the `release_candidate_1.0rc3.1` tag, explains
+both observations at once:
+
+- `SetDeviceInfo`: `rgswap = ((configtable[8] >> zone) & 1) || rgswapconfig[zone]`
+  -- a zone swaps when the **board's own table** OR the setting says so. The
+  file can force a swap on, and **never off**.
+- `configtable[8]` is read from the board at every OpenRGB start, and
+  `DeviceUpdateMode` writes zeros into that table on entering Direct mode: it is
+  board state that more than one writer touches. Something had set the headers'
+  bits before 01:46 here -- SignalRGB, running at this boot until the purge, is a
+  candidate, not a finding -- where Linux's OpenRGB had read them clear.
+- `WriteAllZones`, the Direct path this program takes, applies the swap per
+  zone: swapped sends R,G,B; not swapped sends G,R,B.
+
+So the headers had been swapped all along, their table bits set; the file's
+`false` could not turn that off, nor its `true` change anything. With the swap
+on, all five zones show red as green -- the Linux config was right for Linux
+only because its board table read the headers clear. **A probe cannot tell "the
+setting is ignored" from "the swap was already on"**: both change nothing. Only
+the source could, and it took the falsified fix to go and read it.
+
+**Fix:** the one arrangement that does not depend on the table, on both halves:
+`openrgb_rg_swap` pins the swap on for all five zones, and `zone_channel_order`
+sends all five `GRB`. `ambience_rgb.openrgb_settings` writes the pin beside the
+detector pin -- one write, one backup; a list, since there is no off to pin; no
+rule, no pin -- and both installers now stop their own OpenRGB for the edit,
+because it reads the file only at start and writes the whole of it back from
+memory. `install.sh` never restarted it at all: `enable --now` leaves a running
+unit alone. A shipped-config test holds the two keys to one set on this board,
+and a general guard fails the build if a zone sent GRB is not pinned. Verified
+by eye through the daemon's own pipeline: pure red and pure green each showed as
+themselves on all five zones and on every other device.
+
+🚨 **On Linux the order matters now.** With this config the headers are right
+there only once `install.sh` has pinned OpenRGB. Pulling and restarting the
+daemon alone sends the headers GRB against a swap that may be off -- green for
+red, the mirror image of this.
+
 ## Deliberately not done
 
 - **Custom colours and patterns** drive the bulbs only; the RGB goes black in

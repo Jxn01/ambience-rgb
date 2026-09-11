@@ -16,7 +16,8 @@ gets neither right on its own:
   nothing to lean on, since OpenRGB writes zeros into it on entering Direct
   mode. What ``zone_channel_order`` sends comes out right only while the swap
   is where the config assumes: on the first Windows boot the addressable
-  headers showed green for red because nothing pinned it.
+  headers showed green for red, because the board's table had their swap on
+  and nothing swapped them back.
 
 OpenRGB reads this file once, as it detects devices, and writes the whole of it
 back from memory whenever it saves a setting. An edit made while it runs does

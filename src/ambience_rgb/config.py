@@ -89,10 +89,11 @@ class DeviceRule:
     zone_channel_order: dict[str, str] = field(default_factory=dict)
     """Per-zone overrides, because one controller can treat zones differently.
 
-    On the ASRock X870E Taichi, OpenRGB swaps red and green on IO Cover and PCB
-    -- the board's own table asks it to -- and there that swap turns red into
-    green, so the config swaps them back with ``"GRB"``. That holds only while
-    OpenRGB's swap does, which is why ``openrgb_rg_swap`` pins it.
+    On the ASRock X870E Taichi, OpenRGB's red/green swap turns red into green
+    on every zone that carries LEDs here, so the config sends those zones
+    ``"GRB"``, swapping them back. That holds only while OpenRGB's swap is on --
+    which the board's table decides differently between boots -- so
+    ``openrgb_rg_swap`` pins it on for the same zones.
     """
     openrgb_rg_swap: tuple[str, ...] = ()
     """Zones whose red/green swap OpenRGB is made to do, through ``OpenRGB.json``.

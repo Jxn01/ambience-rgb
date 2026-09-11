@@ -183,10 +183,11 @@ class ChannelOrderTest(unittest.TestCase):
     """🚨 One controller can wire its zones differently from each other.
 
     Verified on this rig by sending pure primaries and looking: through the
-    red/green swap OpenRGB makes on the ASRock X870E Taichi's onboard IO-cover
-    and PCB zones -- the board's table asks for it -- those zones show RED when
-    sent green and GREEN when sent red, while its addressable fan headers --
-    same OpenRGB device, same write -- are correct. So the option is per ZONE.
+    red/green swap OpenRGB makes on the ASRock X870E Taichi's zones, a zone it
+    swaps shows RED when sent green and GREEN when sent red. Which zones those
+    are is the board's table's call as much as OpenRGB's setting -- on Linux
+    only IO Cover and PCB, on Windows all five -- which is why the option is
+    per ZONE, and why ``openrgb_rg_swap`` pins the swap.
 
     The symptom was a pink screen showing as vivid green-cyan on two zones and
     correct pink everywhere else, which reads as anything but a wiring order.

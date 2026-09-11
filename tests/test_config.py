@@ -466,13 +466,13 @@ class OpenRgbRgSwapTest(unittest.TestCase):
     def test_every_zone_the_shipped_config_swaps_back_is_one_openrgb_swaps(self) -> None:
         """🚨 The pairing guard: a zone swapped back must be one OpenRGB swaps.
 
-        The board's table marks IO Cover and PCB as swapped, so OpenRGB swaps
-        them and the config's ``GRB`` swaps them back -- but only while
-        OpenRGB's swap holds, and the table is nothing to lean on: OpenRGB
-        itself writes zeros into it on entering Direct mode. Pinned in
-        ``OpenRGB.json``, the swap holds on every OpenRGB and every boot. A
-        ``GRB`` without the pin comes out swapped once wherever the table reads
-        clear: green for red.
+        The config's ``GRB`` undoes OpenRGB's red/green swap -- but only while
+        that swap is on, and unpinned it is the board's table's call, which
+        differs between boots: OpenRGB itself writes zeros into it on entering
+        Direct mode, and on the first Windows boot it read set for the headers
+        where Linux had read it clear. Pinned in ``OpenRGB.json``, the swap
+        holds on every OpenRGB and every boot. A ``GRB`` without the pin comes
+        out swapped once wherever the table reads clear: green for red.
         """
 
         config = load_config(SHIPPED)
@@ -487,21 +487,30 @@ class OpenRgbRgSwapTest(unittest.TestCase):
             with self.subTest(device=rule.match, zone=zone):
                 self.assertIn(zone, rule.openrgb_rg_swap)
 
-    def test_the_shipped_board_pins_its_onboard_zones_and_its_addressable_headers(self) -> None:
-        """The five zones this rig needs OpenRGB to swap.
+    def test_on_this_board_every_pinned_zone_is_swapped_back(self) -> None:
+        """🚨 The five zones -- and on THIS board, the pin and the GRB are one set.
 
-        IO Cover and PCB pair with their ``GRB``. The three addressable headers
-        need OpenRGB's swap and nothing else: on the first Windows boot, with
-        OpenRGB's default of off, raw red came out green on every one of them.
-        PCH and the two 12 V RGB headers are left to OpenRGB -- none of them was
-        ever checked by eye.
+        With OpenRGB's swap on, all five ASRock zones show red as green, and the
+        swap can be forced on but never off. So all five are pinned on and all
+        five are sent GRB: the one state that does not depend on the board's
+        table, which differs between boots. On the first Windows boot the
+        headers showed green for red although OpenRGB.json said false -- the
+        board's bits for them read set -- and pinning them on changed nothing,
+        by eye with pure red and pure blue. Linux had read those bits clear.
+
+        Not a universal rule -- LEDs that take their bytes as RGB would want the
+        pin without the GRB -- but a fact of this rig. PCH and the two 12 V RGB
+        headers are left to OpenRGB: none of them was ever checked by eye.
         """
 
         rule = load_config(SHIPPED).rule_for("ASRock X870E Taichi")
+        pinned = set(rule.openrgb_rg_swap)
         self.assertEqual(
-            set(rule.openrgb_rg_swap),
+            pinned,
             {"IO Cover", "PCB", "Addressable Header 1", "Addressable Header 2", "Addressable Header 3/Audio"},
         )
+        swapped_back = {zone for zone, order in rule.zone_channel_order.items() if order == "GRB"}
+        self.assertEqual(swapped_back, pinned)
 
 
 if __name__ == "__main__":  # pragma: no cover

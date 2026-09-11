@@ -154,20 +154,26 @@ bus = "usb"
 zones = { "IO Cover" = "near", "PCB" = "near" }
 
 # 🚨 Red and green are swapped in TWO places for this board, and the two must
-# move together. OpenRGB swaps a zone whenever the board's own table or its
+# move together. OpenRGB swaps a zone whenever the board's own table OR its
 # settings file says so -- the file can force a swap on, never off -- and with
-# that swap on, red comes out as green on IO Cover and PCB but as red on the
-# addressable headers. So openrgb_rg_swap pins OpenRGB's swap on for all five
-# (the installers write it into OpenRGB.json), and zone_channel_order swaps IO
-# Cover and PCB back. Unpinned, the headers follow the board's table, which
-# OpenRGB itself zeroes on entering Direct mode: on the first Windows boot every
-# header showed green for red.
+# that swap on, every one of these five zones shows red as green. The table is
+# board state that differs between boots (OpenRGB itself zeroes it on entering
+# Direct mode), so the one arrangement that holds everywhere is both halves:
+# OpenRGB's swap pinned on for all five (openrgb_rg_swap -- the installers write
+# it into OpenRGB.json) and all five swapped back here.
 #
-# Verified by sending pure primaries and looking. Per ZONE, because the first
-# symptom was a pink screen showing as vivid green-cyan on exactly two zones and
-# correct pink everywhere else. PCH and the two 12 V RGB headers are left to
-# OpenRGB: none of them has been checked by eye.
-zone_channel_order = { "IO Cover" = "GRB", "PCB" = "GRB" }
+# 🚨 Change one, change the other, and re-run the installer. On the first
+# Windows boot the headers showed green for red although OpenRGB.json said
+# false -- the board's bits for them read set -- and pinning them true changed
+# nothing, which looked exactly like the setting being ignored. Linux, with the
+# same file, had read those bits clear and needed no GRB on the headers.
+#
+# Verified by sending pure primaries through the daemon's pipeline and looking,
+# 2026-09-11, with both keys as below: pure red and pure green each showed as
+# themselves on all five zones and everywhere else. Per ZONE, not per device:
+# PCH and the two 12 V RGB headers are left to OpenRGB, and none of them has
+# been checked by eye.
+zone_channel_order = { "IO Cover" = "GRB", "PCB" = "GRB", "Addressable Header 1" = "GRB", "Addressable Header 2" = "GRB", "Addressable Header 3/Audio" = "GRB" }
 openrgb_rg_swap = ["IO Cover", "PCB", "Addressable Header 1", "Addressable Header 2", "Addressable Header 3/Audio"]
 
 [[devices]]

@@ -205,6 +205,15 @@ repository.
 The names match on purpose, and a test holds the units, the installers and the
 commands this program prints to the same three.
 
+🚨 **On Windows the shutdown task is invisible unelevated.** It runs as SYSTEM,
+and a shell that is not elevated cannot read it: `Get-ScheduledTask` and
+`Start-ScheduledTask` answer *No MSFT_ScheduledTask objects found* -- exactly
+what they say of a task that does not exist -- and only
+`schtasks /query /tn ambience-rgb-lights-off` says *Access is denied*. Look at
+it, or start it, from an elevated PowerShell. `uninstall.ps1` refuses to run
+unelevated for the same reason: its check for the task would read "hidden" as
+"not registered" and leave it armed.
+
 The daemon only `Wants=` the OpenRGB server. A dead server should cost the
 motherboard and RAM, not the AIO, which needs no server at all.
 
@@ -732,8 +741,8 @@ boot wrote back:
 
 1. `tests\integration\check_hardware.py`: eyes on the AIO and the soundbar.
 2. A logoff blacks everything -- the session-end window.
-3. `Start-ScheduledTask -TaskName ambience-rgb-lights-off` blacks everything
-   without a reboot; then a real restart does.
+3. `Start-ScheduledTask -TaskName ambience-rgb-lights-off`, from an elevated
+   shell, blacks everything without a reboot; then a real restart does.
 4. After that restart, `netsh int ipv4 show excludedportrange protocol=udp` still
    does not cover 45731: Hyper-V and WSL reserve their ranges at boot.
 

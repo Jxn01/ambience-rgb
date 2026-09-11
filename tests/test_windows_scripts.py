@@ -168,6 +168,43 @@ class InstallerTest(unittest.TestCase):
         self.assertIn("RGB_PUBLISH_SOCKET=", self.text)
 
 
+class ShutdownTaskElevationTest(unittest.TestCase):
+    """🚨 Unelevated, the SYSTEM shutdown task is invisible, not merely locked.
+
+    ``Get-ScheduledTask`` and ``Start-ScheduledTask`` answer "No
+    MSFT_ScheduledTask objects found" -- word for word what they say of a task
+    that does not exist; only ``schtasks /query`` says "Access is denied". Seen
+    on the first Windows boot, from an unelevated shell, with the task
+    registered and Ready.
+    """
+
+    START = re.compile(r"Start-ScheduledTask -TaskName (ambience-rgb-lights-off|\$AmbienceShutdownTask)\b")
+
+    def test_uninstall_checks_elevation_before_it_looks_for_the_tasks(self) -> None:
+        """Its existence check would otherwise read "hidden" as "not
+        registered" and leave the shutdown task armed."""
+
+        text = code(read("uninstall.ps1"))
+        elevation = text.find("WindowsBuiltInRole]::Administrator")
+        self.assertNotEqual(elevation, -1, "uninstall.ps1 never checks for elevation")
+        self.assertLess(elevation, text.index("Get-ScheduledTask"))
+
+    def test_every_instruction_to_start_it_says_to_elevate(self) -> None:
+        sources = {
+            "README.md": (REPO / "README.md").read_text(encoding="utf-8"),
+            "install.ps1": read("install.ps1"),
+        }
+        found = 0
+        for name, text in sources.items():
+            for paragraph in re.split(r"\n\s*\n", text):
+                if self.START.search(paragraph):
+                    found += 1
+                    with self.subTest(source=name, paragraph=paragraph.strip()[:70]):
+                        self.assertIn("elevated", paragraph)
+        # The positive control: the pattern still finds the instructions.
+        self.assertGreaterEqual(found, 2, "the instructions this guards have moved")
+
+
 class TaskNamesTest(unittest.TestCase):
     """One vocabulary for both halves: the task names are the unit names."""
 

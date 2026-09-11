@@ -1030,6 +1030,19 @@ and guards in `test_unit_files.py` and `test_windows_scripts.py` hold both
 installers to that. Only `bash -n` and the text guards ran here; the Linux run
 is Garuda's.
 
+🚨 **The SYSTEM shutdown task is invisible to an unelevated shell** -- found
+while checking the tasks for the final report. `Get-ScheduledTask` listed the
+two logon tasks and said of `ambience-rgb-lights-off` *No MSFT_ScheduledTask
+objects found*, word for word what it says of a missing task; `schtasks /query`
+said *Access is denied*, and the task's XML under `System32\Tasks` could not be
+read. It was registered and Ready, as the elevated listing had shown. Nothing
+was broken -- `uninstall.ps1` already refuses to run unelevated -- but the
+README's checklist and `install.ps1`'s closing text told the user to start it
+without saying to elevate, and the handoff's "elevated if Access is denied"
+waits for a message the cmdlet never prints. Both now say it, and a guard holds
+every such instruction to it and `uninstall.ps1`'s elevation check to coming
+before its lookup.
+
 ## Deliberately not done
 
 - **Custom colours and patterns** drive the bulbs only; the RGB goes black in

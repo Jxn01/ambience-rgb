@@ -314,5 +314,6 @@ Write-Host @"
   Logs:            $daemonLog
                    $shutdownLog
   The shutdown task without a reboot (it stops the daemon and blacks
-  everything):     Start-ScheduledTask -TaskName $AmbienceShutdownTask
+  everything; from an elevated shell -- unelevated, the SYSTEM task is not
+  even listed):    Start-ScheduledTask -TaskName $AmbienceShutdownTask
 "@

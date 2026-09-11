@@ -1018,6 +1018,18 @@ there only once `install.sh` has pinned OpenRGB. Pulling and restarting the
 daemon alone sends the headers GRB against a swap that may be off -- green for
 red, the mirror image of this.
 
+🚨 **And `install.sh` did not restart the daemon either** -- found at review,
+after the above was pushed. The same `enable --now` that left a running OpenRGB
+alone left a running daemon alone, so following the Linux sequence exactly --
+pull, re-run the installer, look -- would have kept the daemon on its old code
+and its old config, which does not swap the headers back, against the swap the
+installer had just pinned on: green for red again, produced by the
+instructions. `install.ps1` never had this; its step 6 restarts the task.
+`install.sh` now enables the daemon and `restart`s it after the settings edit,
+and guards in `test_unit_files.py` and `test_windows_scripts.py` hold both
+installers to that. Only `bash -n` and the text guards ran here; the Linux run
+is Garuda's.
+
 ## Deliberately not done
 
 - **Custom colours and patterns** drive the bulbs only; the RGB goes black in

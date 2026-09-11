@@ -112,9 +112,10 @@ program needs in OpenRGB's settings -- the Commander Core detectors off and the
 config's `openrgb_rg_swap` zones on, with its OpenRGB unit stopped for the edit,
 backing the file up first or creating it if OpenRGB has never run -- installs a
 udev rule that gives you the Katana's serial port and keeps ModemManager off it,
-then installs three systemd units and enables them. The shutdown unit is handed
-the config file the daemon reads, so **re-run it after creating or moving a
-config**.
+then installs three systemd units, enables them, and restarts the daemon -- it
+loads its code and reads its config only when it starts, so a re-run is what
+puts a pull or a config change live. The shutdown unit is handed the config
+file the daemon reads, so **re-run it after creating or moving a config**.
 
 Then tell MatterLights to publish, in its `.env` -- `ambience-rgb devices` prints
 the exact line:
@@ -546,8 +547,9 @@ both: the zone in `openrgb_rg_swap`, which the installers pin on in
 `OpenRGB.json`, and `GRB` in `zone_channel_order` if, with that swap on, it
 still shows red as green -- on this rig, all five zones. So check that both keys
 list the zone, re-run the installer (it stops OpenRGB, pins the swaps and starts
-it again; OpenRGB reads its settings only when it starts), confirm that
-`"ASRock Polychrome USB"` / `"RGSwap"` in `OpenRGB.json` holds `true` for it,
+it again, then restarts the daemon; each reads its settings only when it
+starts), confirm that `"ASRock Polychrome USB"` / `"RGSwap"` in `OpenRGB.json`
+holds `true` for it,
 then send pure red and look. 🚨 A probe cannot tell a swap setting that is
 ignored from one that was already on: the first Windows boot showed every
 addressable header green for red although `OpenRGB.json` said `false` -- the

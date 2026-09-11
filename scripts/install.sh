@@ -180,7 +180,17 @@ install_unit() {   # $1 = unit, $2 = dest dir, $3 = "sudo" or empty
 install_unit ambience-rgb-openrgb.service "$USER_UNIT_DIR"
 install_unit ambience-rgb.service         "$USER_UNIT_DIR"
 systemctl --user daemon-reload
-systemctl --user enable --now ambience-rgb-openrgb.service ambience-rgb.service
+systemctl --user enable --now ambience-rgb-openrgb.service
+# Not `enable --now` for the daemon: that starts a stopped unit and leaves a
+# running one alone, so a re-run after a pull left the daemon on its old code
+# and its old config -- it reads the config once, at start -- against the
+# OpenRGB settings just edited above. openrgb_rg_swap and zone_channel_order
+# are two halves of one setting, so a daemon left on the old half shows red as
+# green on every zone that changed. `restart` starts a stopped unit and
+# restarts a running one, as install.ps1 restarts its task; the stop path
+# blacks the case and lets go of the hardware before the new daemon opens it.
+systemctl --user enable ambience-rgb.service
+systemctl --user restart ambience-rgb.service
 
 install_unit ambience-rgb-lights-off.service "$SYSTEM_UNIT_DIR" sudo
 sudo systemctl daemon-reload

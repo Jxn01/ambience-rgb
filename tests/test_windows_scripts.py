@@ -138,6 +138,16 @@ class InstallerTest(unittest.TestCase):
         self.assertTrue(calls, "install.ps1 never calls Stop-AmbienceOpenRgb")
         self.assertLess(min(calls), text.index("-m ambience_rgb.openrgb_settings"))
 
+    def test_a_rerun_restarts_the_daemon_on_the_pulled_code_and_config(self) -> None:
+        """The daemon reads its config once, at start, so a re-run after a pull
+        must restart it -- after OpenRGB's settings have been edited. install.sh
+        is held to the same, and for a long time did not do it."""
+
+        text = code(self.text)
+        restart = text.find("Restart-AmbienceTask $AmbienceDaemonTask")
+        self.assertNotEqual(restart, -1, "install.ps1 never restarts the daemon task")
+        self.assertLess(text.index("-m ambience_rgb.openrgb_settings"), restart)
+
     def test_it_requires_elevation(self) -> None:
         self.assertIn("WindowsBuiltInRole]::Administrator", self.text)
 

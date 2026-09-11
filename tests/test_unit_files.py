@@ -128,6 +128,23 @@ class InstallerTest(unittest.TestCase):
         self.assertLess(stop, edit)
         self.assertLess(edit, start)
 
+    def test_a_rerun_restarts_the_daemon_on_the_pulled_code_and_config(self) -> None:
+        """🚨 ``enable --now`` starts a stopped unit and leaves a running one alone.
+
+        So a re-run after a pull left the daemon on its old code and its old
+        config -- it reads the config once, at start -- while the settings edit
+        above had just changed OpenRGB under it. With the red/green pin, that is
+        green for red on every header, produced by following the instructions.
+        ``install.ps1`` restarts its daemon task; this holds Linux to the same.
+        """
+
+        installer = (UNITS.parent / "scripts" / "install.sh").read_text(encoding="utf-8")
+        code = "\n".join(line for line in installer.splitlines() if not line.lstrip().startswith("#"))
+        start = code.index("systemctl --user enable --now ambience-rgb-openrgb.service")
+        restart = code.find("systemctl --user restart ambience-rgb.service")
+        self.assertNotEqual(restart, -1, "install.sh never restarts the daemon")
+        self.assertLess(start, restart)
+
 
 class PlaceholderTest(unittest.TestCase):
     def test_every_unit_uses_the_install_dir_placeholder(self) -> None:

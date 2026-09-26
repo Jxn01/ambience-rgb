@@ -6,7 +6,9 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PY="$REPO_ROOT/.venv/bin/python"
+# shellcheck source=linux-venv.sh
+source "$REPO_ROOT/scripts/linux-venv.sh"
+PY="$AMBIENCE_RGB_VENV/bin/python"
 [ -x "$PY" ] || PY=python3
 
 cd "$REPO_ROOT/tests/integration" || exit 1

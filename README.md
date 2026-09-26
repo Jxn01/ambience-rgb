@@ -117,6 +117,17 @@ loads its code and reads its config only when it starts, so a re-run is what
 puts a pull or a config change live. The shutdown unit is handed the config
 file the daemon reads, so **re-run it after creating or moving a config**.
 
+The venv is built **outside the checkout**, at `~/.local/share/venvs/ambience-rgb`
+(`$XDG_DATA_HOME/venvs/ambience-rgb`; override with `AMBIENCE_RGB_VENV`). The
+checkout may be shared with Windows -- one tree on a drive both halves of a dual
+boot mount -- and Windows' venv is `.venv` in the checkout, where its scheduled
+tasks run it. A Linux venv in the same place would collide with it (one
+`pyvenv.cfg`; `lib`/`Lib` differ only in case). `scripts/linux-venv.sh` is the one
+place the location is decided, and `tests/test_linux_venv.py` holds every script
+and unit to it. **Installed before 2026-09-26?** Re-run `scripts/install.sh`
+(it reinstalls the units against the new venv), then delete the old Linux
+`.venv` -- the one with a `bin/` directory; a `.venv` with `Scripts/` is Windows'.
+
 Then tell MatterLights to publish, in its `.env` -- `ambience-rgb devices` prints
 the exact line:
 
@@ -177,8 +188,9 @@ as CoolerControl's liquidctl on Linux. The installer reports them, and
 
 ## Commands
 
-On Windows run these as `.venv\Scripts\python -m ambience_rgb …` in the
-repository.
+On Linux run these as `~/.local/share/venvs/ambience-rgb/bin/ambience-rgb …`
+(the venv lives outside the checkout, see Install). On Windows run them as
+`.venv\Scripts\python -m ambience_rgb …` in the repository.
 
 | Command | What it does |
 |---|---|

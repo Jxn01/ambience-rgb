@@ -37,7 +37,9 @@ for tool in wine winepath curl unzip; do
 done
 
 if [ ! -x "$PYDIR/python.exe" ]; then
-    host_python="$REPO/.venv/bin/python"
+    # shellcheck source=linux-venv.sh
+    source "$REPO/scripts/linux-venv.sh"
+    host_python="$AMBIENCE_RGB_VENV/bin/python"
     [ -x "$host_python" ] || host_python=python3
     mkdir -p "$PYDIR/Lib/site-packages" "$CACHE/wheels"
     zip="$CACHE/python-$PY_VERSION-embed-amd64.zip"

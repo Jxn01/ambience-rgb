@@ -5,7 +5,7 @@ DefaultDependencies=no
 After=basic.target
 Before=shutdown.target
 Conflicts=shutdown.target
-RequiresMountsFor=@INSTALL_DIR@ @CONFIG_DIR@
+RequiresMountsFor=@INSTALL_DIR@ @CONFIG_DIR@ @VENV_DIR@
 
 [Service]
 Type=oneshot
@@ -20,7 +20,7 @@ ExecStart=/bin/true
 # server is still up at this point in the shutdown; when it is not, those have
 # already been blacked by the user daemon's own SIGTERM handler. Either way
 # something has written black. This is the belt to that braces.
-ExecStop=@INSTALL_DIR@/.venv/bin/python -m ambience_rgb off
+ExecStop=@VENV_DIR@/bin/python -m ambience_rgb off
 TimeoutStopSec=20
 # The config the DAEMON reads, resolved by the installer. Root at shutdown has
 # neither the user's home nor their environment to search, so it is handed the

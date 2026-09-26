@@ -6,6 +6,8 @@
 # writes its own defaults at its next start.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=linux-venv.sh
+source "$REPO_ROOT/scripts/linux-venv.sh"
 USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 systemctl --user disable --now ambience-rgb.service ambience-rgb-openrgb.service 2>/dev/null || true
@@ -16,7 +18,7 @@ sudo systemctl disable --now ambience-rgb-lights-off.service 2>/dev/null || true
 sudo rm -f /etc/systemd/system/ambience-rgb-lights-off.service
 sudo systemctl daemon-reload
 
-"$REPO_ROOT/.venv/bin/python" -m ambience_rgb off 2>/dev/null || true
+"$AMBIENCE_RGB_VENV/bin/python" -m ambience_rgb off 2>/dev/null || true
 
 # After the final `off`, so that it could still reach the soundbar.
 sudo rm -f /etc/udev/rules.d/60-ambience-rgb-katana.rules

@@ -8,7 +8,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VENV="$REPO_ROOT/.venv"
+# Outside the checkout -- why is in linux-venv.sh.
+# shellcheck source=linux-venv.sh
+source "$REPO_ROOT/scripts/linux-venv.sh"
+VENV="$AMBIENCE_RGB_VENV"
 USER_UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 SYSTEM_UNIT_DIR="/etc/systemd/system"
 OPENRGB_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/OpenRGB/OpenRGB.json"
@@ -64,6 +67,7 @@ bold "Using $SYSTEM_PYTHON ($("$SYSTEM_PYTHON" -V))"
 # --------------------------------------------------------------------------
 if [[ ! -d "$VENV" ]]; then
     bold "Creating $VENV (--system-site-packages, so it can see hid)"
+    mkdir -p "$(dirname "$VENV")"
     "$SYSTEM_PYTHON" -m venv --system-site-packages "$VENV"
 fi
 "$VENV/bin/python" -m pip install --quiet --upgrade pip
@@ -171,6 +175,7 @@ install_unit() {   # $1 = unit, $2 = dest dir, $3 = "sudo" or empty
     # Every @PLACEHOLDER@ a unit uses must be filled here; test_unit_files.py
     # fails the build when one is not.
     sed -e "s|@INSTALL_DIR@|$REPO_ROOT|g" \
+        -e "s|@VENV_DIR@|$VENV|g" \
         -e "s|@CONFIG_PATH@|$CONFIG_PATH|g" \
         -e "s|@CONFIG_DIR@|$CONFIG_DIR|g" \
         "$src" | ${3:+sudo} tee "$dst" >/dev/null

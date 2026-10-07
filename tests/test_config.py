@@ -368,8 +368,10 @@ class ShippedConfigTest(unittest.TestCase):
 
         self.assertEqual(config.openrgb_host, "127.0.0.1", "never bind the LAN")
         self.assertTrue(config.commander.enabled)
-        self.assertTrue(config.katana.enabled)
-        self.assertEqual(config.katana.group, GROUP_FAR, "it lights the desk, not the screen")
+        # Since 2026-10-07 the soundbar goes through Home Assistant, not USB.
+        self.assertFalse(config.katana.enabled)
+        self.assertTrue(config.katana_ha.enabled)
+        self.assertEqual(config.katana_ha.group, GROUP_FAR, "it lights the desk, not the screen")
 
         expected = {
             "Alienware AW3225QF": GROUP_NEAR,

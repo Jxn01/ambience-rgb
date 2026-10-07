@@ -46,6 +46,7 @@ SECRET_FILENAMES = re.compile(
     r"|.*\.(pem|key|p12|pfx|keystore)"
     r"|credentials?(\..*)?"
     r"|secrets?(\..*)?"
+    r"|\.?[\w-]*token"
     r")$",
     re.IGNORECASE,
 )
@@ -162,6 +163,7 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("tests/test_repo_hygiene.py", _tracked_files(), "the sweep sees this repo")
         self.assertTrue(SECRET_FILENAMES.search(".env.bak-040827"), "the file that actually leaked")
         self.assertTrue(SECRET_FILENAMES.search("deploy/.env.local"))
+        self.assertTrue(SECRET_FILENAMES.search(".ha-token"), "the Home Assistant token for [katana_ha]")
         token = "ey" + "J" + "a" * 20 + "." + "b" * 20 + "." + "c" * 20
         self.assertTrue(JWT.search(token), "the shape of the token that actually leaked")
         self.assertFalse(_is_placeholder("k" * 40), "a long random value is a real one")

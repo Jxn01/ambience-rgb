@@ -205,26 +205,41 @@ class KatanaHAConfigTest(unittest.TestCase):
         self.assertNotIn("katana", names)
         self.assertNotIn("katana-ha", [s.name for s in build_sinks(_parse({}))])
 
-    def test_example_config_leaves_it_off(self):
+    def test_the_shipped_config_drives_the_soundbar_through_home_assistant(self):
         from ambience_rgb.config import EXAMPLE_CONFIG, load_config
 
-        self.assertFalse(load_config(EXAMPLE_CONFIG).katana_ha.enabled)
+        config = load_config(EXAMPLE_CONFIG)
+        self.assertTrue(config.katana_ha.enabled)
+        self.assertFalse(config.katana.enabled)
 
 
 class TokenTest(unittest.TestCase):
     def test_env_wins(self):
         self.assertEqual(read_token(environ={TOKEN_ENV: " abc "}), "abc")
 
-    def test_file_in_config_dir(self):
+    def test_file_at_the_checkout_root(self):
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp) / "ambience-rgb"
-            directory.mkdir()
-            (directory / "ha-token").write_text("tok\n", encoding="utf-8")
-            self.assertEqual(read_token(platform="linux", environ={"XDG_CONFIG_HOME": tmp}), "tok")
+            (Path(tmp) / ".ha-token").write_text("tok\n", encoding="utf-8")
+            self.assertEqual(read_token(environ={}, root=Path(tmp)), "tok")
+
+    def test_token_file_setting_wins_over_the_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "elsewhere").write_text("other", encoding="utf-8")
+            self.assertEqual(read_token(str(Path(tmp) / "elsewhere"), environ={}, root=Path(tmp)), "other")
 
     def test_missing_token_says_where(self):
         with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(HAStreamError, "ha-token"):
-            read_token(platform="linux", environ={"XDG_CONFIG_HOME": tmp})
+            read_token(environ={}, root=Path(tmp))
+
+    def test_the_default_token_file_is_gitignored(self):
+        import subprocess
+
+        from ambience_rgb.ha_stream import REPO_ROOT
+
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "check-ignore", "-q", ".ha-token"], check=False
+        )
+        self.assertEqual(result.returncode, 0, ".ha-token must be gitignored")
 
 
 class _Handler(BaseHTTPRequestHandler):

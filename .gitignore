@@ -10,3 +10,5 @@ __pycache__/
 .env.*
 !.env.example
 config.toml
+# The Home Assistant token for [katana_ha]: shared by both halves, never tracked.
+.ha-token

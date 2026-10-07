@@ -119,7 +119,7 @@ fan_group = "far"
 # can open the port and ModemManager leaves it alone. On Windows it is a COM port
 # from the inbox usbser driver and needs nothing -- but Windows opens a COM port
 # exclusively, so nothing else (Creative's app, for one) may be holding it.
-enabled = true
+enabled = false   # since 2026-10-07 the soundbar is driven through Home Assistant: [katana_ha]
 group = "far"
 rate_hz = 2.0
 # port = "/dev/ttyACM0"   # or "COM3"; unset: found by its USB IDs, 041e:3283 or 041e:3260
@@ -137,11 +137,9 @@ rate_hz = 2.0
 # off, not lit black.
 #
 # The token is a Home Assistant long-lived access token, read from
-# $AMBIENCE_RGB_HA_TOKEN or from token_file -- by default "ha-token" in this
-# user's config directory (~/.config/ambience-rgb/ on Linux,
-# %APPDATA%\ambience-rgb\ on Windows). Never in this repository: it lives on the
-# drive both operating systems share.
-enabled = false
+# $AMBIENCE_RGB_HA_TOKEN, or token_file, or else .ha-token at the root of this
+# checkout -- gitignored, never committed, and read by both halves of the rig.
+enabled = true
 group = "far"
 url = "http://192.168.10.2:8123"
 rate_hz = 10.0

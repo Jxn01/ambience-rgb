@@ -5,9 +5,9 @@ access token. That endpoint, not the ``sb_katana.stream_frame`` service, on
 purpose: every service call is a recorded ``call_service`` event, and at 10 Hz
 that is tens of thousands of database rows an hour. The endpoint records nothing.
 
-The token is read from a file in this user's config directory, never from the
-repository: the checkout lives on the drive both operating systems share, and no
-secret goes there.
+The token is read from ``$AMBIENCE_RGB_HA_TOKEN``, or ``token_file`` in the config,
+or else ``.ha-token`` at the root of this checkout -- gitignored, and on the drive
+both operating systems share, so one file serves both halves of the rig.
 """
 
 from __future__ import annotations
@@ -22,33 +22,29 @@ from urllib.parse import urlsplit
 from ambience_rgb import paths
 
 TOKEN_ENV = "AMBIENCE_RGB_HA_TOKEN"
-TOKEN_FILE_NAME = "ha-token"
+TOKEN_FILE_NAME = ".ha-token"
 STREAM_PATH = "/api/sb_katana/stream"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class HAStreamError(RuntimeError):
     """Home Assistant could not be reached, or refused a frame."""
 
 
-def default_token_file(*, platform: str | None = None, environ: Mapping[str, str] | None = None) -> Path | None:
-    directory = paths.config_dir(platform=platform, environ=environ)
-    return None if directory is None else directory / TOKEN_FILE_NAME
+def default_token_file(root: Path = REPO_ROOT) -> Path:
+    return root / TOKEN_FILE_NAME
 
 
 def read_token(
-    token_file: str | None = None, *, platform: str | None = None, environ: Mapping[str, str] | None = None
+    token_file: str | None = None, *, environ: Mapping[str, str] | None = None, root: Path = REPO_ROOT
 ) -> str:
-    """The token from ``$AMBIENCE_RGB_HA_TOKEN``, else from the token file."""
+    """The token from ``$AMBIENCE_RGB_HA_TOKEN``, else ``token_file``, else ``.ha-token`` in the checkout."""
 
     environ = os.environ if environ is None else environ
     if environ.get(TOKEN_ENV, "").strip():
         return environ[TOKEN_ENV].strip()
-    path = (
-        paths.expand_user(Path(token_file))
-        if token_file
-        else default_token_file(platform=platform, environ=environ)
-    )
-    if path is None or not path.is_file():
+    path = paths.expand_user(Path(token_file)) if token_file else default_token_file(root)
+    if not path.is_file():
         raise HAStreamError(f"No Home Assistant token: set {TOKEN_ENV} or create {path}")
     token = path.read_text(encoding="utf-8").strip()
     if not token:

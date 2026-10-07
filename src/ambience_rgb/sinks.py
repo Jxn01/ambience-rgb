@@ -14,6 +14,7 @@ are USB devices that can be unplugged or switched off.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from contextlib import contextmanager
 from typing import Iterator, Protocol
@@ -26,6 +27,7 @@ from ambience_rgb.config import (
     Config,
     DeviceRule,
     KatanaConfig,
+    KatanaHAConfig,
 )
 from ambience_rgb.openrgb_client import OpenRGBClient, OpenRGBError
 from ambience_rgb.render import apply_channel_order, spread
@@ -759,6 +761,157 @@ class KatanaSink:
             self._device = None
 
 
+class KatanaHASink:
+    """The Katana through Home Assistant: colours are posted, HA drives the soundbar.
+
+    Posting happens on a worker thread with a one-colour slot -- the newest
+    colour always wins -- so a slow or absent HA never stalls the daemon's tick
+    (the Commander Core reverts to its firmware pattern if it goes ten seconds
+    unwritten). The tick only computes the colour and drops it in the slot.
+
+    What gets posted:
+
+    * a colour that has really moved (the same epsilon as every sink), at most
+      every ``rate_hz``;
+    * an unchanged colour again every ``keepalive_seconds``, because HA turns the
+      lights off after 10 s without a frame (its hand-over);
+    * **black once, then nothing**: a dark screen, a stale publisher or a stop
+      lets HA's hand-over turn the lighting off, instead of keeping it lit black.
+
+    A post that fails is raised from the next ``write`` so ResilientSink logs it
+    and backs off; the worker keeps the newest colour and tries again.
+    """
+
+    name = "katana-ha"
+
+    def __init__(
+        self,
+        katana: KatanaHAConfig,
+        logger: logging.Logger | None = None,
+        bias: float = 1.0,
+        treatment: dict | None = None,
+        *,
+        client_factory=None,
+        clock=time.monotonic,
+        start_worker: bool = True,
+    ) -> None:
+        self._config = katana
+        self._logger = logger or LOGGER
+        self._bias = bias
+        self._treatment = treatment or {}
+        self._client_factory = client_factory or self._open_client
+        self._clock = clock
+        self._client = None
+        self._sent: RGB | None = None
+        self._posted_at: float | None = None
+        self._slot: RGB | None = None
+        self._error: Exception | None = None
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._stop = threading.Event()
+        self._worker: threading.Thread | None = None
+        self._start_worker = start_worker
+
+    def _open_client(self):
+        from ambience_rgb.ha_stream import HAStreamClient, read_token
+
+        return HAStreamClient(self._config.url or "", read_token(self._config.token_file), self._config.timeout_seconds)
+
+    def _ensure_worker(self) -> None:
+        if self._start_worker and (self._worker is None or not self._worker.is_alive()):
+            self._stop.clear()
+            self._worker = threading.Thread(target=self._run, name="katana-ha poster", daemon=True)
+            self._worker.start()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self._wake.wait(timeout=1.0)
+            self._wake.clear()
+            self.flush()
+
+    def flush(self) -> None:
+        """Post whatever is in the slot. The worker calls it; tests call it directly."""
+
+        with self._lock:
+            colour, self._slot = self._slot, None
+        if colour is None:
+            return
+        try:
+            if self._client is None:
+                self._client = self._client_factory()
+            self._client.post(colour)
+        except Exception as error:  # noqa: BLE001 - surfaced through write()
+            with self._lock:
+                self._error = error
+                if self._slot is None:
+                    self._slot = colour  # try the newest colour again next time
+            if self._client is not None:
+                self._client.close()
+            self._client = None
+
+    def _queue(self, colour: RGB) -> None:
+        with self._lock:
+            self._slot = colour
+        self._ensure_worker()
+        self._wake.set()
+
+    def _raise_pending_error(self) -> None:
+        with self._lock:
+            error, self._error = self._error, None
+        if error is not None:
+            raise error
+
+    def write(self, near: RGB, far: RGB, palette: list | None = None) -> None:
+        self._raise_pending_error()
+        now = self._clock()
+        base = near if self._config.group == GROUP_NEAR else far
+        colour = spread(palette or [], base, 1, bias=self._bias, treatment=self._treatment)[0]
+        if colour == (0, 0, 0):
+            if self._sent != (0, 0, 0):
+                self._queue(colour)
+                self._sent, self._posted_at = colour, now
+            return  # black once, then silence: HA's hand-over turns the lights off
+        recent = self._posted_at is not None and now - self._posted_at < self._config.interval_seconds
+        if recent:
+            return
+        moved = self._sent is None or _moved((self._sent,), (colour,))
+        due = self._posted_at is None or now - self._posted_at >= self._config.keepalive_seconds
+        if not moved and not due:
+            return
+        self._queue(colour)
+        self._sent, self._posted_at = colour, now
+
+    def black(self) -> None:
+        """Exit paths: black once, at once. HA then turns the lights off after its hand-over."""
+
+        if self._sent != (0, 0, 0):
+            self._queue((0, 0, 0))
+            self._sent = (0, 0, 0)
+        if self._start_worker:
+            # The process may be about to exit: give the worker a moment to send it.
+            deadline = time.monotonic() + self._config.timeout_seconds
+            while time.monotonic() < deadline:
+                with self._lock:
+                    if self._slot is None:
+                        break
+                time.sleep(0.02)
+
+    def release(self) -> None:
+        """Nothing held on the soundbar: HA owns it. Just stop posting."""
+
+        self._stop.set()
+        self._wake.set()
+
+    def close(self) -> None:
+        self.release()
+        if self._worker is not None:
+            self._worker.join(timeout=self._config.timeout_seconds + 1)
+            self._worker = None
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+
+
 def build_sinks(config: Config, logger: logging.Logger | None = None) -> list[ResilientSink]:
     """Every configured sink, each wrapped so one failure cannot stop the rest."""
 
@@ -780,5 +933,10 @@ def build_sinks(config: Config, logger: logging.Logger | None = None) -> list[Re
         # lost on it while a retry waits.
         sinks.append(
             ResilientSink(KatanaSink(config.katana, log, config.spread_bias, treatment), log)
+        )
+    if config.katana_ha.enabled:
+        # Config validation guarantees this and [katana] are never both on.
+        sinks.append(
+            ResilientSink(KatanaHASink(config.katana_ha, log, config.spread_bias, treatment), log)
         )
     return sinks

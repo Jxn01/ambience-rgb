@@ -124,6 +124,31 @@ group = "far"
 rate_hz = 2.0
 # port = "/dev/ttyACM0"   # or "COM3"; unset: found by its USB IDs, 041e:3283 or 041e:3260
 
+[katana_ha]
+# The same soundbar through Home Assistant's sb_katana integration, which owns it
+# over Bluetooth (github.com/Jxn01/ha-katana). Only colours are posted, to
+# <url>/api/sb_katana/stream; HA rate-limits, writes them and turns the lights
+# off 10 s after the last frame. Exactly one of [katana] and [katana_ha] may be
+# enabled: two writers would fight over the light bar.
+#
+# What is posted: a colour that has moved (at most rate_hz), an unchanged one
+# again every keepalive_seconds (it must stay under HA's 10 s hand-over), and
+# black ONCE, then nothing -- so a dark screen or a stop ends with the lights
+# off, not lit black.
+#
+# The token is a Home Assistant long-lived access token, read from
+# $AMBIENCE_RGB_HA_TOKEN or from token_file -- by default "ha-token" in this
+# user's config directory (~/.config/ambience-rgb/ on Linux,
+# %APPDATA%\ambience-rgb\ on Windows). Never in this repository: it lives on the
+# drive both operating systems share.
+enabled = false
+group = "far"
+url = "http://192.168.10.2:8123"
+rate_hz = 10.0
+keepalive_seconds = 5.0
+timeout_seconds = 2.0
+# token_file = "~/.config/ambience-rgb/ha-token"
+
 # --- devices ---------------------------------------------------------------
 # `match` is a case-insensitive SUBSTRING of the OpenRGB controller name, not an
 # exact match, because OpenRGB renames devices between versions.

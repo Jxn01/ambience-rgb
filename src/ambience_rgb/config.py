@@ -155,6 +155,31 @@ class KatanaConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class KatanaHAConfig:
+    """The Katana again, but through Home Assistant's ``sb_katana`` integration.
+
+    HA owns the soundbar over Bluetooth; this only posts colours to it. Exactly
+    one of ``[katana]`` (USB) and ``[katana_ha]`` may be enabled -- two writers
+    would fight over the light bar.
+    """
+
+    enabled: bool = False
+    group: str = GROUP_FAR
+    url: str | None = None
+    """HA's base URL, e.g. ``http://192.168.10.2:8123``. Required when enabled."""
+    interval_seconds: float = 0.1
+    """The least time between two posts: ``rate_hz`` in the file, 10 by default.
+    HA applies its own ceiling too (the integration's screen-sync rate option)."""
+    keepalive_seconds: float = 5.0
+    """An unchanged colour is re-posted this often, so HA's hand-over (10 s
+    without a frame -> lights off) does not fire on a static screen."""
+    token_file: str | None = None
+    """Where the long-lived access token is read from. Unset: ``ha-token`` in
+    this user's config directory -- never the shared Projects drive."""
+    timeout_seconds: float = 2.0
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     endpoint: Endpoint
     """Where matterlights' frames arrive. Its ``str()`` is the exact value for
@@ -204,6 +229,7 @@ class Config:
     devices: tuple[DeviceRule, ...] = ()
     commander: CommanderConfig = field(default_factory=CommanderConfig)
     katana: KatanaConfig = field(default_factory=KatanaConfig)
+    katana_ha: KatanaHAConfig = field(default_factory=KatanaHAConfig)
 
     def rule_for(self, controller_name: str) -> DeviceRule | None:
         for rule in self.devices:
@@ -512,6 +538,26 @@ def parse_config(
         port=str(katana_section.get("port") or "").strip() or None,
     )
 
+    katana_ha_section = payload.get("katana_ha") or {}
+    katana_ha = KatanaHAConfig(
+        enabled=bool(katana_ha_section.get("enabled", False)),
+        group=_validate_sync_group(katana_ha_section.get("group", GROUP_FAR), "katana_ha.group"),
+        url=str(katana_ha_section.get("url") or "").strip().rstrip("/") or None,
+        interval_seconds=_rate_interval(katana_ha_section.get("rate_hz", 10.0), "katana_ha.rate_hz"),
+        keepalive_seconds=_positive(katana_ha_section.get("keepalive_seconds", 5.0), "katana_ha.keepalive_seconds"),
+        token_file=str(katana_ha_section.get("token_file") or "").strip() or None,
+        timeout_seconds=_positive(katana_ha_section.get("timeout_seconds", 2.0), "katana_ha.timeout_seconds"),
+    )
+    if katana_ha.enabled:
+        if not katana_ha.url or not katana_ha.url.startswith(("http://", "https://")):
+            raise ConfigError("katana_ha.url must be Home Assistant's base URL, e.g. http://192.168.10.2:8123")
+        if katana.enabled:
+            raise ConfigError(
+                "katana.enabled and katana_ha.enabled are both true: only one may drive the soundbar"
+            )
+        if katana_ha.keepalive_seconds >= 10.0:
+            raise ConfigError("katana_ha.keepalive_seconds must stay under HA's 10 s hand-over")
+
     return Config(
         endpoint=endpoint,
         openrgb_host=str(openrgb.get("host", "127.0.0.1")),
@@ -526,6 +572,7 @@ def parse_config(
         devices=tuple(rules),
         commander=commander,
         katana=katana,
+        katana_ha=katana_ha,
     )
 
 

@@ -462,6 +462,33 @@ Brightness, effects other than a solo colour, and the equaliser are left alone.
 The reference can also upload firmware and read and write device memory; none
 of that is ported, and a test fails if a builder for it appears here.
 
+### Through Home Assistant instead (`[katana_ha]`, on the `feat/katana-via-ha` branch)
+
+The plan agreed on 2026-10-07 moves the soundbar out of this daemon. Home
+Assistant's [`sb_katana`](https://github.com/Jxn01/ha-katana) integration owns
+it over Bluetooth, because HA is always on and this PC is not. This daemon only
+posts colours, the way matterlights posts to the bulbs. The USB driver above
+stays until that is proven, and exactly one of `[katana]` and `[katana_ha]` may
+be enabled; the config refuses both.
+
+| | |
+|---|---|
+| Endpoint | `POST <url>/api/sb_katana/stream`, body `{"rgb": [r, g, b]}`, `Authorization: Bearer <token>`. It is an HTTP view, not the `sb_katana.stream_frame` service, because every service call is a recorded `call_service` event (~36,000 rows an hour at 10 Hz) |
+| Posted | a colour that moved by at least `COLOUR_EPSILON`, at most `rate_hz` (10); an unchanged colour again every `keepalive_seconds` (5), because HA turns the lights off 10 s after the last frame; **black once, then nothing**, so a dark screen, a stale publisher or a stop ends with the lights off rather than lit black |
+| Never blocks | posts run on a worker thread with a one-colour slot (the newest wins), so a slow or absent HA cannot stall the tick that feeds the Commander Core |
+| Failure | a failed post is raised from the next `write`, so `ResilientSink` logs it once and backs off; the newest colour is retried |
+| Token | a long-lived access token from `$AMBIENCE_RGB_HA_TOKEN`, else `token_file`, by default `ha-token` in this user's config directory (`~/.config/ambience-rgb/`, `%APPDATA%\ambience-rgb\`). **Never in the checkout**, which lives on the drive both operating systems share |
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Post to HA instead of driving USB. Requires `[katana] enabled = false` |
+| `group` | `"far"` | `near` or `far` |
+| `url` | — | HA's base URL, required when enabled, e.g. `http://192.168.10.2:8123` |
+| `rate_hz` | `10.0` | The most posts per second. HA applies its own ceiling as well |
+| `keepalive_seconds` | `5.0` | Re-post an unchanged colour this often; must stay under 10 |
+| `timeout_seconds` | `2.0` | HTTP timeout for one post |
+| `token_file` | config dir `ha-token` | Where the token is read from, if `$AMBIENCE_RGB_HA_TOKEN` is unset |
+
 ## Troubleshooting
 
 **Nothing lights up.** `ambience-rgb devices`. If OpenRGB is unavailable, check

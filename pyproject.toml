@@ -21,14 +21,10 @@ requires-python = ">=3.11"
 # PyPI name is "hidapi"; it still imports as `hid` -- for Windows only. Its
 # Windows wheels cover every CPython this supports, so nothing is compiled.
 #
-# pyserial and cryptography (the Katana driver) are safe to declare everywhere:
-# the PyPI packages ARE the libraries distributions ship as python-pyserial and
-# python-cryptography. In the --system-site-packages venv the system copies
-# satisfy these and pip installs nothing; elsewhere it fetches the real thing.
-# pyserial 3.3 is the first with `exclusive=`; cryptography 2.0 the first with AESGCM.
+# Nothing else: the Sound Blaster Katana is reached through Home Assistant over
+# the standard library's http.client. (Its USB serial driver, and with it
+# pyserial and cryptography, was removed on 2026-10-07.)
 dependencies = [
-    "pyserial>=3.3",
-    "cryptography>=2.0",
     "hidapi>=0.14; sys_platform == 'win32'",
 ]
 

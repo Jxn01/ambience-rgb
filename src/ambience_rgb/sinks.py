@@ -1,4 +1,4 @@
-"""Where colours go: OpenRGB's devices, the Commander Core, and the Katana.
+"""Where colours go: OpenRGB's devices, the Commander Core, and the Katana (via HA).
 
 Every sink presents the same tiny interface, and every one is **best effort**. A
 sink that raises is logged once, marked degraded, and retried on a timer; it
@@ -7,8 +7,9 @@ syncing, and losing the OpenRGB server must not stop the AIO.
 
 That is not defensive habit, it is the actual failure mode: the OpenRGB server
 is a separate process that can be restarted or crash on its own (a RESIZEZONE on
-this rig's Commander Core kills 1.0rc3 outright), and the AIO and the soundbar
-are USB devices that can be unplugged or switched off.
+this rig's Commander Core kills 1.0rc3 outright), the AIO is a USB device that
+can be unplugged, and Home Assistant -- which drives the soundbar -- is another
+machine that can be rebooted or unreachable.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ from ambience_rgb.config import (
     CommanderConfig,
     Config,
     DeviceRule,
-    KatanaConfig,
     KatanaHAConfig,
 )
 from ambience_rgb.openrgb_client import OpenRGBClient, OpenRGBError
@@ -45,12 +45,6 @@ RETRY_SECONDS = 10.0
 # almost exactly long enough to guarantee the fans flash green on any hiccup.
 # Its backoff must stay comfortably under that revert time.
 COMMANDER_RETRY_SECONDS = 2.0
-
-# How often the Katana is asked a question to prove it is still listening. See
-# Katana.keepalive: a soundbar power-cycled with its USB link still up drops
-# back into a mode that ignores colour writes in silence, and nothing else here
-# would ever notice.
-KATANA_KEEPALIVE_SECONDS = 5.0
 
 # How often an UNCHANGED colour is written again. The devices need an occasional
 # refresh so a controller that was reset or re-detected does not sit on a stale
@@ -655,112 +649,6 @@ class CommanderCoreSink:
             self._device = None
 
 
-class KatanaSink:
-    """Drives the Sound Blaster Katana's lighting through its serial port.
-
-    The opposite trade to the Commander Core, for the opposite device. The
-    Commander forgets its colour within ten seconds, so it is written on every
-    tick; the soundbar HOLDS its colour indefinitely, so it is written only when
-    the colour has really changed, never on a refresh timer, and never faster
-    than ``rate_hz``.
-
-    ⚠️ The frugality is also insurance. The soundbar keeps its lighting across
-    a power cycle, so some setting is saved somewhere, and whether every colour
-    write reaches its flash is not documented. A write that is never sent
-    cannot wear anything.
-    """
-
-    name = "katana"
-
-    def __init__(
-        self,
-        katana: KatanaConfig,
-        logger: logging.Logger | None = None,
-        bias: float = 1.0,
-        treatment: dict | None = None,
-        *,
-        device_factory=None,
-        clock=time.monotonic,
-    ) -> None:
-        self._config = katana
-        self._logger = logger or LOGGER
-        self._bias = bias
-        self._treatment = treatment or {}
-        self._device_factory = device_factory or self._open_device
-        self._clock = clock
-        self._device = None
-        self._sent: RGB | None = None
-        self._written_at: float | None = None
-        self._asked_at = 0.0
-
-    def _open_device(self):
-        from ambience_rgb.katana import Katana
-
-        # 🚨 No NotYet retries here. Each one sleeps a second, up to six times,
-        # and in the daemon that sleep is inside the tick: every other sink
-        # would freeze with it, the Commander Core included -- which reverts to
-        # its firmware pattern after ten seconds unwritten. NotYet is a failure
-        # instead, and ResilientSink's retry is the wait.
-        return Katana(self._config.port, logger=self._logger, not_yet_retries=0).open()
-
-    def connect(self) -> None:
-        device = self._device_factory()
-        try:
-            device.prepare()
-        except Exception:
-            device.release()
-            raise
-        self._device = device
-        self._sent = None
-        self._asked_at = self._clock()
-        self._logger.info(
-            "katana: %s, firmware %s, on %s", device.model, device.firmware, device.path
-        )
-
-    def write(self, near: RGB, far: RGB, palette: list | None = None) -> None:
-        if self._device is None:
-            self.connect()
-        assert self._device is not None
-        now = self._clock()
-        base = near if self._config.group == GROUP_NEAR else far
-        colour = spread(palette or [], base, 1, bias=self._bias, treatment=self._treatment)[0]
-        with released_on_failure(self):
-            # Before the filters, deliberately: a static screen is exactly when
-            # nothing else would notice that the soundbar stopped listening.
-            if now - self._asked_at >= KATANA_KEEPALIVE_SECONDS:
-                self._asked_at = now
-                self._device.keepalive()
-            if self._written_at is not None and now - self._written_at < self._config.interval_seconds:
-                return
-            if self._sent is not None and not _moved((self._sent,), (colour,)):
-                return
-            self._device.set_colour(colour)
-        self._sent = colour
-        self._written_at = now
-
-    def black(self) -> None:
-        """Unconditional, like every sink's black: it is what exit paths write."""
-
-        if self._device is None:
-            self.connect()
-        assert self._device is not None
-        with released_on_failure(self):
-            self._device.black()
-        self._sent = (0, 0, 0)
-
-    def release(self) -> None:
-        """Drop the port without blacking -- see Katana.release."""
-
-        if self._device is not None:
-            self._device.release()
-            self._device = None
-
-    def close(self) -> None:
-        if self._device is not None:
-            self._device.close()
-            self._device = None
-
-
 class KatanaHASink:
     """The Katana through Home Assistant: colours are posted, HA drives the soundbar.
 
@@ -780,6 +668,12 @@ class KatanaHASink:
 
     A post that fails is raised from the next ``write`` so ResilientSink logs it
     and backs off; the worker keeps the newest colour and tries again.
+
+    A post that HA *refuses* -- ``accepted: false``, because its Screen sync
+    switch is off -- is not a failure: any manual lighting change in HA switches
+    Screen sync off on purpose, and the next post after it is switched back on
+    resumes at once. It is logged once per change instead, because otherwise the
+    light bar simply stops following the screen and nothing says why.
     """
 
     name = "katana-ha"
@@ -811,6 +705,7 @@ class KatanaHASink:
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
         self._start_worker = start_worker
+        self._accepted: bool | None = None  # HA's answer to the last post; None until one lands
 
     def _open_client(self):
         from ambience_rgb.ha_stream import HAStreamClient, read_token
@@ -839,7 +734,7 @@ class KatanaHASink:
         try:
             if self._client is None:
                 self._client = self._client_factory()
-            self._client.post(colour)
+            accepted = self._client.post(colour)
         except Exception as error:  # noqa: BLE001 - surfaced through write()
             with self._lock:
                 self._error = error
@@ -848,6 +743,20 @@ class KatanaHASink:
             if self._client is not None:
                 self._client.close()
             self._client = None
+            return
+        self._note_accepted(bool(accepted))
+
+    def _note_accepted(self, accepted: bool) -> None:
+        if accepted == self._accepted:
+            return
+        if not accepted:
+            self._logger.warning(
+                "katana-ha: Home Assistant is dropping the colours -- the Katana's Screen sync "
+                "switch is off there (any manual lighting change turns it off). Switch it back on in HA."
+            )
+        elif self._accepted is False:
+            self._logger.info("katana-ha: Screen sync is on again; Home Assistant is applying the colours")
+        self._accepted = accepted
 
     def _queue(self, colour: RGB) -> None:
         with self._lock:
@@ -928,14 +837,9 @@ def build_sinks(config: Config, logger: logging.Logger | None = None) -> list[Re
                 COMMANDER_RETRY_SECONDS,
             )
         )
-    if config.katana.enabled:
+    if config.katana_ha.enabled:
         # The standard backoff: the soundbar holds its colour, so nothing is
         # lost on it while a retry waits.
-        sinks.append(
-            ResilientSink(KatanaSink(config.katana, log, config.spread_bias, treatment), log)
-        )
-    if config.katana_ha.enabled:
-        # Config validation guarantees this and [katana] are never both on.
         sinks.append(
             ResilientSink(KatanaHASink(config.katana_ha, log, config.spread_bias, treatment), log)
         )

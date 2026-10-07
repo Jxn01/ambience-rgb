@@ -45,12 +45,13 @@ fi
 # ⚠️ Present is not the same as KEPT. On the author's rig python-hidapi arrived as
 # a dependency of liquidctl, so pacman considered it liquidctl's: removing
 # liquidctl -- or any orphan sweep -- would have uninstalled the binding this
-# daemon imports, and the Commander Core would have died on its next open. The
-# Katana driver's two libraries were the same shape (pyserial arrived with
-# inkscape, cryptography with python-pip), so all three are pinned.
+# daemon imports, and the Commander Core would have died on its next open. So it
+# is pinned. (The USB Katana driver's pyserial and cryptography were pinned the
+# same way until that driver was removed on 2026-10-07; nothing here needs them
+# now, and their pins are left as they are rather than undone.)
 # `pacman -Qdq` is used rather than parsing `-Qi`, whose labels are localised.
 if command -v pacman >/dev/null; then
-    for package in python-hidapi python-pyserial python-cryptography; do
+    for package in python-hidapi; do
         if pacman -Qdq "$package" >/dev/null 2>&1; then
             sudo pacman -D --asexplicit "$package" >/dev/null \
                 && echo "  $package marked explicitly installed (it was only held as a dependency)"
@@ -129,12 +130,13 @@ if [[ -f "$CC_CONFIG" ]] && grep -qE '^[[:space:]]*liquidctl_integration[[:space
 fi
 
 # --------------------------------------------------------------------------
-# 3b. Give this user the Katana's serial port, and keep ModemManager off it
+# 3b. Keep ModemManager off the Katana's serial port
 #
-# The soundbar's control port is a CDC ACM device -- by USB class, a modem -- so
-# it is created root:uucp 0660 and ModemManager probes it with AT commands. The
-# rule tags it `uaccess` (an ACL for whoever is logged in at the seat) and tells
-# ModemManager to leave it alone. See the rule file for why its name starts 60.
+# The soundbar is driven through Home Assistant now, but plugged in by USB it
+# still exposes a CDC ACM control port -- by USB class, a modem -- and an active
+# ModemManager probes every such port with AT commands. A soundbar is not a
+# modem; the rule tells ModemManager to leave it alone. Nothing in this project
+# opens the port any more, so the rule no longer grants anyone access to it.
 # --------------------------------------------------------------------------
 UDEV_RULE=60-ambience-rgb-katana.rules
 if [[ -d /etc/udev/rules.d ]]; then
@@ -144,19 +146,6 @@ if [[ -d /etc/udev/rules.d ]]; then
     sudo udevadm trigger --action=change --subsystem-match=tty --sysname-match='ttyACM*'
     sudo udevadm settle
     echo "  installed /etc/udev/rules.d/$UDEV_RULE"
-    # The ACL is the check, not the rule file's existence.
-    katana_tty=$("$SYSTEM_PYTHON" -c '
-from serial.tools.list_ports import comports
-print(next((p.device for p in comports() if p.vid == 0x041E and p.pid in (0x3283, 0x3260)), ""))
-' 2>/dev/null || true)
-    if [[ -n "$katana_tty" ]]; then
-        if [[ -r "$katana_tty" && -w "$katana_tty" ]]; then
-            echo "  Katana at $katana_tty: readable and writable by $USER"
-        else
-            warn "  Katana at $katana_tty is still not accessible to $USER.
-  uaccess grants the user logged in at the seat; over SSH, log in locally. Check: getfacl $katana_tty"
-        fi
-    fi
 fi
 
 # --------------------------------------------------------------------------

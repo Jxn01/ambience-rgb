@@ -36,6 +36,15 @@ for tool in wine winepath curl unzip; do
     command -v "$tool" >/dev/null || { echo "test-under-wine: needs $tool" >&2; exit 2; }
 done
 
+# Wine's user32 needs a display to create even a hidden window. Without one --
+# an SSH shell, a background job -- the session-end hook falls back to its null
+# hook and test_windows_gets_the_window FAILS, which reads as a regression and
+# is not one (it bit on 2026-10-07). From a GNOME Wayland session, borrow its
+# Xwayland: DISPLAY=:0 XAUTHORITY="$(ls /run/user/$UID/.mutter-Xwaylandauth.*)".
+if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    echo "test-under-wine: no DISPLAY -- test_windows_gets_the_window will fail; see the comment above" >&2
+fi
+
 if [ ! -x "$PYDIR/python.exe" ]; then
     # shellcheck source=linux-venv.sh
     source "$REPO/scripts/linux-venv.sh"

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import logging.handlers
 import re
 import socket
@@ -39,7 +40,7 @@ def _free_port(kind: int) -> int:
 
 
 def _write_config(directory: str, port: int, *, devices: bool = False) -> Path:
-    """UDP on a free port, OpenRGB on a closed one, own drivers only if asked."""
+    """UDP on a free port, OpenRGB on a closed one, own drivers and HA only if asked."""
 
     path = Path(directory) / "config.toml"
     enabled = "true" if devices else "false"
@@ -50,7 +51,8 @@ def _write_config(directory: str, port: int, *, devices: bool = False) -> Path:
         "[openrgb]\n"
         f"port = {_free_port(socket.SOCK_STREAM)}\n"
         f"[commander]\nenabled = {enabled}\n"
-        f"[katana]\nenabled = {enabled}\n",
+        f"[katana_ha]\nenabled = {enabled}\n"
+        f'url = "http://{LOOPBACK}:{_free_port(socket.SOCK_STREAM)}"\n',
         encoding="utf-8",
     )
     return path
@@ -165,6 +167,42 @@ class OffCommandTest(_LoggingIsolation):
             self._read(Path(directory) / "off.log")
 
 
+class _FakeHA:
+    """Stands in for HAStreamClient: answers ``status()`` from ``answer``, and remembers the token."""
+
+    answer: dict = {}
+    tokens: list[str] = []
+
+    def __init__(self, _url: str, token: str, _timeout: float = 2.0) -> None:
+        _FakeHA.tokens.append(token)
+
+    def status(self) -> dict:
+        return dict(_FakeHA.answer)
+
+    def close(self) -> None:
+        pass
+
+
+def _fake_ha(**answer):
+    """Patch HA in: the client, and a token from the environment rather than a real ``.ha-token``."""
+
+    _FakeHA.answer = {
+        "screen_sync": True,
+        "receiving": False,
+        "available": True,
+        "frames_received": 4,
+        "frames_dropped": 1,
+        "writes_sent": 2,
+        "write_errors": 0,
+        **answer,
+    }
+    _FakeHA.tokens = []
+    return (
+        mock.patch("ambience_rgb.ha_stream.HAStreamClient", _FakeHA),
+        mock.patch.dict(os.environ, {"AMBIENCE_RGB_HA_TOKEN": "test-token"}),
+    )
+
+
 class DevicesTest(_LoggingIsolation):
     def test_it_prints_the_value_matterlights_needs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -190,15 +228,52 @@ class DevicesTest(_LoggingIsolation):
             holder = bind(endpoint)
             out = io.StringIO()
             try:
-                with mock.patch("ambience_rgb.commander_core.CommanderCore", Refuse), mock.patch(
-                    "ambience_rgb.katana.Katana", Refuse
-                ), redirect_stdout(out), redirect_stderr(io.StringIO()):
+                client, token = _fake_ha()
+                with mock.patch("ambience_rgb.commander_core.CommanderCore", Refuse), client, token, redirect_stdout(
+                    out
+                ), redirect_stderr(io.StringIO()):
                     cli.main(["--config", str(config_path), "devices"])
             finally:
                 release(endpoint, holder)
         self.assertEqual(opened, [])
         self.assertIn("held by the running daemon", out.getvalue())
         self.assertIn(hints.stop_daemon(), out.getvalue())
+        # HA is asked even then: it is another machine, and asking changes nothing.
+        self.assertEqual(_FakeHA.tokens, ["test-token"])
+        self.assertIn("Screen sync on, receiving no, soundbar connected yes", out.getvalue())
+
+    def test_it_says_when_home_assistant_is_dropping_the_colours(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            port = _free_port(socket.SOCK_DGRAM)
+            config_path = _write_config(directory, port, devices=True)
+            endpoint = UdpEndpoint(LOOPBACK, port)
+            holder = bind(endpoint)  # held, so no real device is opened
+            out = io.StringIO()
+            try:
+                client, token = _fake_ha(screen_sync=False)
+                with client, token, redirect_stdout(out), redirect_stderr(io.StringIO()):
+                    cli.main(["--config", str(config_path), "devices"])
+            finally:
+                release(endpoint, holder)
+        self.assertIn("Screen sync OFF", out.getvalue())
+        self.assertIn("drops every colour", out.getvalue())
+
+    def test_an_unreachable_home_assistant_is_reported_not_raised(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            port = _free_port(socket.SOCK_DGRAM)
+            config_path = _write_config(directory, port, devices=True)  # HA's url: a closed loopback port
+            endpoint = UdpEndpoint(LOOPBACK, port)
+            holder = bind(endpoint)
+            out = io.StringIO()
+            try:
+                with mock.patch.dict(os.environ, {"AMBIENCE_RGB_HA_TOKEN": "test-token"}), redirect_stdout(
+                    out
+                ), redirect_stderr(io.StringIO()):
+                    code = cli.main(["--config", str(config_path), "devices"])
+            finally:
+                release(endpoint, holder)
+        self.assertEqual(code, 0)
+        self.assertIn("unavailable: Home Assistant unreachable", out.getvalue())
 
 
 class DevicesContentionTest(_LoggingIsolation):
@@ -228,11 +303,10 @@ class DevicesContentionTest(_LoggingIsolation):
             holder = bind(endpoint)  # held, so no real device is opened
             out = io.StringIO()
             try:
+                client, token = _fake_ha()
                 with mock.patch("ambience_rgb.openrgb_client.OpenRGBClient", Server), mock.patch(
                     "ambience_rgb.commander_core.CommanderCore", Refuse
-                ), mock.patch("ambience_rgb.katana.Katana", Refuse), redirect_stdout(out), redirect_stderr(
-                    io.StringIO()
-                ):
+                ), client, token, redirect_stdout(out), redirect_stderr(io.StringIO()):
                     cli.main(["--config", str(config_path), "devices"])
             finally:
                 release(endpoint, holder)

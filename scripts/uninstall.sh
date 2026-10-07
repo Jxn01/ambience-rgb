@@ -20,7 +20,7 @@ sudo systemctl daemon-reload
 
 "$AMBIENCE_RGB_VENV/bin/python" -m ambience_rgb off 2>/dev/null || true
 
-# After the final `off`, so that it could still reach the soundbar.
+# The rule only keeps ModemManager off the soundbar's serial port (see install.sh, 3b).
 sudo rm -f /etc/udev/rules.d/60-ambience-rgb-katana.rules
 sudo udevadm control --reload
 

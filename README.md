@@ -13,13 +13,16 @@ not a requirement.
 ### Will this work on your machine?
 
 **If OpenRGB can see your hardware, so can this.** That is the whole dependency
-for everything except two devices, which this repository drives itself:
+for everything except two devices, which this repository reaches itself:
 
 - the **Corsair Commander Core** (the AIO pump and its fans), which OpenRGB
   cannot size the zones of on this board -- a hand-written `hidraw` driver;
-- the **Sound Blaster Katana V2X** (and V2) soundbar's light bar, which no RGB
-  software on Linux drives at all -- a serial driver, adapted from the
-  MIT-licensed [`v2x`](https://git.dog/xx/v2x) reverse engineering.
+- the **Sound Blaster Katana V2X** soundbar's light bar, which no RGB software
+  on Linux drives at all -- through Home Assistant, whose
+  [`sb_katana`](https://github.com/Jxn01/ha-katana) integration owns the
+  soundbar over Bluetooth; this daemon only posts it colours. (Until 2026-10-07
+  this repository drove it over USB itself; see *The Katana, through Home
+  Assistant*.)
 
 If you own neither, nothing is lost: disable them in the config and the rest
 works unchanged.
@@ -52,7 +55,7 @@ ambience-rgb (this)                                                    |
   subscribe  <--------------------------------------------------------'
   near/far -> OpenRGBSink       -> RAM x2, GPU, mouse, monitor, motherboard
            -> CommanderCoreSink -> AIO pump + fans   (our own HID driver)
-           -> KatanaSink        -> soundbar light bar (our own serial driver)
+           -> KatanaHASink      -> Home Assistant (HTTP) -> soundbar light bar (Bluetooth)
 ```
 
 MatterLights captures the screen; this does not. A second capture would double
@@ -80,7 +83,7 @@ shipped default.
 | Razer Naga V2 Pro (Logo, Numpad) | 2 | far | USB | OpenRGB |
 | Corsair Commander Core — pump | 29 | far | USB HID | **ours** |
 | Corsair Commander Core — fans (3 × 8) | 24 | far | USB HID | **ours** |
-| Sound Blaster Katana V2X — light bar | one colour | far | USB serial | **ours** |
+| Sound Blaster Katana V2X — light bar | one colour | far | HTTP → Home Assistant → Bluetooth | **ours** (`sb_katana`) |
 | Keychron K0 Max | — | **excluded** | — | — |
 
 **near** is what sits around the screen; **far** is what lights the room. The
@@ -94,12 +97,10 @@ motherboard is split *per zone* because both are true of it at once.
 Commander Core and the soundbar) and the *distribution* package for the `hidapi`
 Python binding -- `python-hidapi` on Arch, `python3-hid` on Debian/Ubuntu. Do
 **not** `pip install hid`: the PyPI package under that name is a different
-library and shadows the system one inside the venv.
-
-The Katana driver also needs `pyserial` and `cryptography`. The distribution
-packages (`python-pyserial`, `python-cryptography`) are used when present and
-pip fetches them otherwise -- unlike `hid`, those PyPI packages *are* the same
-libraries.
+library and shadows the system one inside the venv. For the soundbar: Home
+Assistant with the `sb_katana` integration, and a long-lived token (see *The
+Katana, through Home Assistant*). Nothing else -- HA is reached with the standard
+library.
 
 ```bash
 scripts/install.sh
@@ -111,8 +112,9 @@ cannot take them), builds the venv with `--system-site-packages`, sets what this
 program needs in OpenRGB's settings -- the Commander Core detectors off and the
 config's `openrgb_rg_swap` zones on, with its OpenRGB unit stopped for the edit,
 backing the file up first or creating it if OpenRGB has never run -- installs a
-udev rule that gives you the Katana's serial port and keeps ModemManager off it,
-then installs three systemd units, enables them, and restarts the daemon -- it
+udev rule that keeps ModemManager off the Katana's USB serial port (it is a
+"modem" by USB class, and ModemManager would probe it with AT commands), then
+installs three systemd units, enables them, and restarts the daemon -- it
 loads its code and reads its config only when it starts, so a re-run is what
 puts a pull or a config change live. The shutdown unit is handed the config
 file the daemon reads, so **re-run it after creating or moving a config**.
@@ -197,7 +199,7 @@ On Linux run these as `~/.local/share/venvs/ambience-rgb/bin/ambience-rgb …`
 | `ambience-rgb run` | The daemon. What the systemd unit and the logon task run. |
 | `ambience-rgb off` | Write black to everything once and exit. What the shutdown unit runs. |
 | `ambience-rgb off --stop-daemon` | First ask a running daemon to stop -- it blacks and releases every device -- wait until it has, then black everything once more. What the Windows shutdown task runs, and **the way to stop the daemon on Windows**. |
-| `ambience-rgb devices` | Print what would be driven, with groups, buses and LED counts, and the exact `RGB_PUBLISH_SOCKET` value for matterlights. **Run this first when something looks wrong.** Read-only: it never changes a colour, and skips the Commander Core and the Katana while the daemon holds them. It also warns when OpenRGB has detected the Commander Core too. |
+| `ambience-rgb devices` | Print what would be driven, with groups, buses and LED counts, and the exact `RGB_PUBLISH_SOCKET` value for matterlights. **Run this first when something looks wrong.** Read-only: it never changes a colour, and skips the Commander Core while the daemon holds it. For the Katana it asks Home Assistant -- safe while the daemon runs -- and prints whether Screen sync is on, whether HA is receiving, whether the soundbar is connected, and HA's frame and write counters. It also warns when OpenRGB has detected the Commander Core too. |
 
 | Option | Meaning |
 |---|---|
@@ -257,10 +259,8 @@ the repo. One file serves both platforms, and says so where they differ.
 | `rates.usb_hz` / `rates.smbus_hz` | Update rate **per bus**. |
 | `commander.enabled` | Drive the AIO at all. |
 | `commander.pump_group` / `commander.fan_group` | `near` or `far`. Not `excluded`: the device is written whole, so use `enabled = false`. |
-| `katana.enabled` | Drive the soundbar's light bar. **Off unless set**, so a config that predates it never goes looking for a serial port. |
-| `katana.group` | `near` or `far`. Not `excluded`, as above. |
-| `katana.rate_hz` | The most colour writes per second -- a ceiling, not a rate. Default `2.0`; see *The Katana driver*. |
-| `katana.port` | A serial port to use instead of finding the soundbar by its USB IDs (`041e:3283`, `041e:3260`). |
+| `katana_ha.*` | The soundbar through Home Assistant -- every key is in *The Katana, through Home Assistant*. |
+| `katana.enabled` | **Removed** with the USB driver on 2026-10-07. `true` is refused with a pointer to `[katana_ha]`; a leftover section with `enabled = false` is ignored, whatever else it holds. |
 | `devices[].match` | Case-insensitive **substring** of the OpenRGB controller name. |
 | `devices[].group` | `near`, `far`, or `excluded`. |
 | `devices[].bus` | `usb` or `smbus`, selecting which rate applies. |
@@ -406,88 +406,61 @@ their commands and replies simply interleave. Two contenders are known:
   default but inert until liquidctl is installed — then it goes live at its next
   restart. `scripts/install.sh` warns if it is on. See *Troubleshooting*.
 
-## The Katana driver
+## The Katana, through Home Assistant
 
-The Sound Blaster Katana V2X (`041e:3283`, and the V2 at `041e:3260`) exposes its
-controls as a **USB CDC ACM serial port** — `/dev/ttyACM0` here, `COM3` on
-Windows — not as HID. The protocol was reverse-engineered and published by
-Rasmus Moorats ([write-up](https://blog.nns.ee/2026/02/20/katana-v2x-re/),
-MIT-licensed [`v2x`](https://git.dog/xx/v2x) crate); `katana_protocol.py`
-translates the lighting part of it and carries the crate's licence notice.
-
-| | |
-|---|---|
-| Connect | Ask for the firmware version. An answer means binary mode already; silence means text mode, and then `whoareyou` → AES-256-GCM challenge → `unlock` → `SW_MODE1` |
-| Frames | `5A op length payload`; lighting is opcode `0x3A`; colours travel as ABGR |
-| Replies | Every setter is acknowledged (`5A 02 0A 3A 00 …`); those are read as they arrive |
-| Tested on | firmware `1.3.230619.1820` |
-
-⚠️ **The soundbar has its own power supply.** Once unlocked it stays in binary
-mode until *it* is power-cycled — rebooting the PC does not reset it. So the
-unlock runs once per soundbar power cycle (about 1.3 s to connect), and every
-start after that finds it ready.
-
-⚠️ **Power-cycled while its USB link stays up, it would ignore every colour in
-silence**, because text mode drops binary frames without a word. The sink asks
-it a question every 5 s and reconnects when one goes unanswered.
-
-⚠️ **Exactly one process may drive it.** The port is opened with pyserial's
-`exclusive=True` — which is only an advisory `flock` — *and* the kernel's
-`TIOCEXCL`, which refuses every further `open()` to anyone but root: a second
-opener gets `Device or resource busy`. A COM port on Windows is exclusive
-anyway; Creative's own app is the contender there.
-
-**It is written as little as possible.** Unlike the Commander Core it *holds*
-its colour, so an unchanged colour is never re-sent, a change must exceed
-`COLOUR_EPSILON`, and `katana.rate_hz` caps the rest at 2 Hz by default. The
-soundbar remembers its lighting across a power cycle, and whether each colour
-write reaches its flash is not documented. Measured here: an ACK to a changed
-colour arrives as fast as one to an unchanged colour (0.3 ms median), 20 Hz is
-sustained with every write acknowledged, and nothing stalls in the fifteen
-seconds after a change — no sign of a synchronous or debounced save. That is
-evidence, not proof, so the default stays low.
-
-🚨 **Hold firmware updates until someone has checked them.** `1.30.260813.1100`
-post-dates the published protocol and its hardcoded key, and a vendor whose
-authentication has been published has every reason to change it.
-
-**Permissions.** The port is created `root:uucp 0660`. `scripts/install.sh`
-installs `udev/60-ambience-rgb-katana.rules`, which tags it `uaccess` and sets
-`ID_MM_DEVICE_IGNORE`, so ModemManager stops probing it with AT commands.
-⚠️ The rule's name must sort **before** `73-seat-late.rules`: `uaccess` is only
-acted on there, so the same line in a `99-*.rules` file silently does nothing.
-Check with `getfacl /dev/ttyACM0` — it must list your user.
-
-Brightness, effects other than a solo colour, and the equaliser are left alone.
-The reference can also upload firmware and read and write device memory; none
-of that is ported, and a test fails if a builder for it appears here.
-
-### Through Home Assistant instead (`[katana_ha]`, on the `feat/katana-via-ha` branch)
-
-The plan agreed on 2026-10-07 moves the soundbar out of this daemon. Home
-Assistant's [`sb_katana`](https://github.com/Jxn01/ha-katana) integration owns
-it over Bluetooth, because HA is always on and this PC is not. This daemon only
-posts colours, the way matterlights posts to the bulbs. The USB driver above
-stays until that is proven, and exactly one of `[katana]` and `[katana_ha]` may
-be enabled; the config refuses both.
+The Sound Blaster Katana V2X's light bar follows the screen through **Home
+Assistant**. HA's [`sb_katana`](https://github.com/Jxn01/ha-katana) integration
+owns the soundbar over Bluetooth -- HA is always on and this PC is not, and the
+integration drives everything else on the soundbar too -- so this daemon only
+posts colours to it, the way matterlights posts to the bulbs. HA rate-limits
+them, writes them, and owns the hand-over: 10 s after the last colour it turns
+the light bar off once.
 
 | | |
 |---|---|
-| Endpoint | `POST <url>/api/sb_katana/stream`, body `{"rgb": [r, g, b]}`, `Authorization: Bearer <token>`. It is an HTTP view, not the `sb_katana.stream_frame` service, because every service call is a recorded `call_service` event (~36,000 rows an hour at 10 Hz) |
+| Endpoint | `POST <url>/api/sb_katana/stream`, body `{"rgb": [r, g, b]}`, `Authorization: Bearer <token>`; HA answers `{"accepted": true}`, or `false` while its **Screen sync** switch is off. It is an HTTP view, not the `sb_katana.stream_frame` service, because every service call is a recorded `call_service` event (~36,000 rows an hour at 10 Hz); the view records nothing. `GET` on the same path answers the stream's status, which is what `devices` prints |
 | Posted | a colour that moved by at least `COLOUR_EPSILON`, at most `rate_hz` (10); an unchanged colour again every `keepalive_seconds` (5), because HA turns the lights off 10 s after the last frame; **black once, then nothing**, so a dark screen, a stale publisher or a stop ends with the lights off rather than lit black |
 | Never blocks | posts run on a worker thread with a one-colour slot (the newest wins), so a slow or absent HA cannot stall the tick that feeds the Commander Core |
 | Failure | a failed post is raised from the next `write`, so `ResilientSink` logs it once and backs off; the newest colour is retried |
-| Token | a long-lived access token from `$AMBIENCE_RGB_HA_TOKEN`, else `token_file`, by default `ha-token` in this user's config directory (`~/.config/ambience-rgb/`, `%APPDATA%\ambience-rgb\`). **Never in the checkout**, which lives on the drive both operating systems share |
+| Refused | `accepted: false` is not a failure -- **any manual lighting change in HA switches Screen sync off**, on purpose, and the next post after it is switched back on lands at once. The daemon logs a warning when HA starts refusing and a line when it accepts again, once each, rather than going quietly dark |
+| Token | a long-lived access token (HA → your profile → Security → *Long-lived access tokens*), read from `$AMBIENCE_RGB_HA_TOKEN`, else `token_file`, else **`.ha-token` at the root of this checkout** -- gitignored, guarded by `tests/test_repo_hygiene.py`, and on the drive both operating systems share, so one file serves both halves of the rig |
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Post to HA instead of driving USB. Requires `[katana] enabled = false` |
-| `group` | `"far"` | `near` or `far` |
-| `url` | — | HA's base URL, required when enabled, e.g. `http://192.168.10.2:8123` |
-| `rate_hz` | `10.0` | The most posts per second. HA applies its own ceiling as well |
-| `keepalive_seconds` | `5.0` | Re-post an unchanged colour this often; must stay under 10 |
-| `timeout_seconds` | `2.0` | HTTP timeout for one post |
-| `token_file` | config dir `ha-token` | Where the token is read from, if `$AMBIENCE_RGB_HA_TOKEN` is unset |
+| `enabled` | `false` | Post the soundbar's colour to HA. Off unless set, so a config that predates it never posts anywhere |
+| `group` | `"far"` | `near` or `far`. Not `excluded`: the light bar is one colour, so use `enabled = false` |
+| `url` | — | HA's base URL, required when enabled, e.g. `http://192.168.10.2:8123`. `http://` or `https://` |
+| `rate_hz` | `10.0` | The most posts per second -- a ceiling, not a rate. HA applies its own ceiling as well (the integration's screen-sync rate option) |
+| `keepalive_seconds` | `5.0` | Re-post an unchanged colour this often; must stay under HA's 10 s hand-over, and a config that does not is refused |
+| `timeout_seconds` | `2.0` | HTTP timeout for one post; also how long a stop waits for its black to go out |
+| `token_file` | `.ha-token` in the checkout | Where the token is read from, if `$AMBIENCE_RGB_HA_TOKEN` is unset. `~` is expanded |
+
+The soundbar's own settings -- volume, input, sound modes, EQ, the other
+lighting effects -- are HA entities, not this daemon's business; see the
+integration's README.
+
+### The USB driver this replaced (removed 2026-10-07)
+
+From 2026-09-10 to 2026-10-07 this repository drove the light bar itself, over
+the soundbar's USB CDC ACM serial port (`/dev/ttyACM0`, `COM3` on Windows),
+using Rasmus Moorats' published protocol
+([write-up](https://blog.nns.ee/2026/02/20/katana-v2x-re/), MIT-licensed
+[`v2x`](https://git.dog/xx/v2x) crate): a text-mode AES-256-GCM unlock, then
+binary `5A op len payload` frames. It worked, on both operating systems. It was
+retired because a USB link only exists while this PC is on, and HA's Bluetooth
+link exists always -- and two writers on one light bar would fight. Its code,
+tests and the `pyserial`/`cryptography` dependencies are in the git history
+before the commit that removed them.
+
+What is left of it is the udev rule, `udev/60-ambience-rgb-katana.rules`: the
+serial port still appears whenever the soundbar is plugged in by USB (for
+audio), and by USB class it is a modem, so the rule sets `ID_MM_DEVICE_IGNORE`
+to keep an active ModemManager from probing it with AT commands. It no longer
+tags the port `uaccess`: nothing here opens it.
+
+🚨 Whichever way it is driven: **hold the soundbar's firmware at
+`1.3.230619.1820`.** `1.30.260813.1100` post-dates every published protocol, and
+`sb_katana` refuses every write on any other firmware.
 
 ## Troubleshooting
 
@@ -499,20 +472,23 @@ and skips it entirely while the daemon is running: exactly one process may hold
 that device, and a diagnostic that fights the daemon for it produces protocol
 errors in both.)
 
-**The soundbar does not follow.** Stop the daemon (`systemctl --user stop
-ambience-rgb`) and run `ambience-rgb devices`: it opens the soundbar read-only
-and prints its model, firmware and current colour, or says why it could not.
+**The soundbar does not follow.** Run `ambience-rgb devices` -- the daemon can
+keep running -- and read the Katana line:
 
-- *No Sound Blaster Katana on USB* — it is off or unplugged. It is matched by
-  USB IDs only, never by trying whatever `ttyACM` port exists.
-- *Permission denied* — the udev rule is missing or did not apply; see
-  *Permissions* under *The Katana driver*.
-- *Device or resource busy* — another process has the port: `fuser -v
-  /dev/ttyACM0`.
-- *refused the unlock* — the firmware may have changed the key; compare its
-  version with `1.3.230619.1820`.
-
-Each connection logs `katana: Sound Blaster Katana V2X, firmware …, on …`.
+- *Screen sync OFF* — the usual cause. Any manual lighting change in HA switches
+  it off; switch it back on (Sound Blaster Katana V2X → Screen sync). The
+  daemon's log says the same: `katana-ha: Home Assistant is dropping the
+  colours`.
+- *soundbar connected no* — HA has lost the Bluetooth link: the soundbar is off,
+  or Creative's app holds it (turn the integration's **Hold connection** back
+  on).
+- *unavailable: No Home Assistant token* — create `.ha-token` at the root of the
+  checkout, or set `$AMBIENCE_RGB_HA_TOKEN`.
+- *unavailable: Home Assistant answered 401* — the token was revoked or mistyped.
+  *answered 404* — `sb_katana` is not loaded, or is too old to have the
+  endpoint. *unreachable* — HA is down or `url` is wrong.
+- *receiving no* while the daemon runs and the screen is not black — check the
+  daemon's log for `katana-ha` failures.
 
 **The AIO flickers between its colours and its firmware rainbow every second or
 two.** Another program is driving the Commander Core. The journal says so
@@ -652,10 +628,12 @@ enough -- and `scripts\windows\install.ps1 -DisableCompetitors` stops and
 disables them. OpenRGB's own Commander Core detector is the other contender;
 `devices` warns when OpenRGB lists the device.
 
-**The soundbar does not follow.** Windows opens a COM port exclusively, so any
-other program holding `COM3` -- Creative's app, a serial terminal -- locks the
-daemon out, and the log says `Access is denied`. For the same reason, stop the
-daemon (`off --stop-daemon`) before running `devices` or `check_hardware.py`.
+**The soundbar does not follow.** The same as on Linux: `devices` asks Home
+Assistant, and the usual answer is that Screen sync is off there. The token is
+the same `.ha-token` file, `S:\Projects\ambience-rgb\.ha-token`, since the
+checkout is shared. `COM3` is no longer opened by anything (until 2026-10-07 it
+was the soundbar's USB driver); stop the daemon (`off --stop-daemon`) before
+running `check_hardware.py`.
 
 **The daemon is not running.** `Get-ScheduledTask -TaskName ambience-rgb` shows
 its state and last result, and `Start-ScheduledTask -TaskName ambience-rgb`
@@ -693,7 +671,7 @@ Researched 2026-09-10, written up in
 | | |
 |---|---|
 | **Ducky One 3 TKL RGB** | **Ruled out.** Its RGB is onboard-only — no host lighting software exists, so there is nothing to capture and no protocol to speak. The vendor HID interface is for firmware. All the open-source prior art targets the One **2**, a different vendor ID. |
-| **Sound Blaster Katana V2X** | **Driven since 2026-09-10** — see *The Katana driver*. Live on Linux; on Windows it is `COM3` through the inbox `usbser` driver, and the same code opens it there — the most portable device in the project, needing no OpenRGB server and no HID. ⚠️ If you own one, hold off on firmware `1.30.260813.1100`: it post-dates the published protocol and nobody has checked it. |
+| **Sound Blaster Katana V2X** | **Driven since 2026-09-10; through Home Assistant since 2026-10-07** — see *The Katana, through Home Assistant*. Both operating systems post to the same HA with the same token, so nothing about it is platform-specific any more. ⚠️ Hold the soundbar at firmware `1.3.230619.1820`. |
 | **Windows** | **Built 2026-09-10; first ran there 2026-09-11** -- installed, its suite green on Windows itself, and verified on the real hardware; a logoff, the shutdown task and a restart are still to check. See the next section. |
 
 ## Windows: what is verified, and what is not
@@ -758,8 +736,10 @@ boot wrote back:
   and purged, which goes further than `-DisableCompetitors`.
 - `devices` with the daemon stopped: the Commander Core through Windows' hidapi
   (pump 29 LEDs, fans 8/8/8), the Katana V2X on `COM3`, and the exact
-  `RGB_PUBLISH_SOCKET` line. The Katana's AES unlock works there too: text mode
-  to binary in 0.22 s.
+  `RGB_PUBLISH_SOCKET` line. The Katana's AES unlock worked there too: text mode
+  to binary in 0.22 s. *(That was the USB driver, removed on 2026-10-07; the
+  soundbar now goes through Home Assistant on both halves, which Windows has not
+  yet run -- see *Still needs Windows*.)*
 - `tests\integration\check_hardware.py`, with the owner watching: red, green,
   blue and white held in order on the AIO pump and fans, and then on the
   soundbar's light bar -- the only evidence that counts for those two devices.
@@ -769,7 +749,7 @@ boot wrote back:
   pulled copy; the one from before would put a terminal window back at every
   logon.
 - `off --stop-daemon` stops a running daemon in about half a second, blacking
-  every sink and releasing `COM3`. `Stop-ScheduledTask -TaskName ambience-rgb`
+  every sink (then, the soundbar on `COM3` too). `Stop-ScheduledTask -TaskName ambience-rgb`
   does not: it kills the daemon with no black -- the case keeps its last colours
   -- and Task Scheduler does not restart it, because its restart-on-failure does
   not count a user's stop as a failure.
@@ -786,6 +766,10 @@ boot wrote back:
    shell, blacks everything without a reboot; then a real restart does.
 3. After that restart, `netsh int ipv4 show excludedportrange protocol=udp` still
    does not cover 45731: Hyper-V and WSL reserve their ranges at boot.
+4. The soundbar through Home Assistant (since 2026-10-07): `devices` prints the
+   Katana line with Screen sync on, and the light bar follows the screen. It is
+   the same code and the same `.ha-token` as on Linux, using only `http.client`,
+   so nothing new needs installing -- but it has not run on Windows yet.
 
 ## Development
 

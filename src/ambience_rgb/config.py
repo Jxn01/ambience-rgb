@@ -64,6 +64,14 @@ def platform_name(platform: str | None = None) -> str:
     return _PLATFORM_NAMES.get(platform, platform)
 
 
+REMOVED_KATANA_USB = (
+    "[katana] enabled = true: the USB serial driver for the Sound Blaster Katana was "
+    "removed on 2026-10-07. The soundbar is driven through Home Assistant now: set "
+    "[katana] enabled = false (or delete the section) and enable [katana_ha] -- see "
+    "config.example.toml and the README's Katana section."
+)
+
+
 class ConfigError(ValueError):
     """The configuration file is unusable, with the reason named."""
 
@@ -139,28 +147,13 @@ class CommanderConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class KatanaConfig:
-    """The Sound Blaster Katana V2X (or V2) soundbar, over its USB serial port."""
-
-    enabled: bool = False
-    """Off unless asked for: a config written before the Katana existed must not
-    start retrying a missing serial port every ten seconds, forever."""
-    group: str = GROUP_FAR
-    """``near`` or ``far``. A soundbar lights the desk, not the screen."""
-    interval_seconds: float = 0.5
-    """The least time between two colour writes: ``rate_hz`` in the file, 2 Hz
-    by default. A ceiling, not a rate -- see sinks.KatanaSink for why it is low."""
-    port: str | None = None
-    """A serial port to use instead of finding the soundbar by its USB IDs."""
-
-
-@dataclass(frozen=True, slots=True)
 class KatanaHAConfig:
-    """The Katana again, but through Home Assistant's ``sb_katana`` integration.
+    """The Sound Blaster Katana V2X, through Home Assistant's ``sb_katana`` integration.
 
-    HA owns the soundbar over Bluetooth; this only posts colours to it. Exactly
-    one of ``[katana]`` (USB) and ``[katana_ha]`` may be enabled -- two writers
-    would fight over the light bar.
+    HA owns the soundbar over Bluetooth; this only posts colours to it. Until
+    2026-10-07 the soundbar was driven over its USB serial port instead, by
+    ``[katana]``; that driver is gone, and a config still enabling it is refused
+    (see ``REMOVED_KATANA_USB``).
     """
 
     enabled: bool = False
@@ -174,8 +167,10 @@ class KatanaHAConfig:
     """An unchanged colour is re-posted this often, so HA's hand-over (10 s
     without a frame -> lights off) does not fire on a static screen."""
     token_file: str | None = None
-    """Where the long-lived access token is read from. Unset: ``ha-token`` in
-    this user's config directory -- never the shared Projects drive."""
+    """Where the long-lived access token is read from, when
+    ``$AMBIENCE_RGB_HA_TOKEN`` is unset. Unset: ``.ha-token`` at the root of this
+    checkout -- gitignored, and on the drive both operating systems share, so one
+    file serves both halves of the rig (see ha_stream.read_token)."""
     timeout_seconds: float = 2.0
 
 
@@ -228,7 +223,6 @@ class Config:
     """
     devices: tuple[DeviceRule, ...] = ()
     commander: CommanderConfig = field(default_factory=CommanderConfig)
-    katana: KatanaConfig = field(default_factory=KatanaConfig)
     katana_ha: KatanaHAConfig = field(default_factory=KatanaHAConfig)
 
     def rule_for(self, controller_name: str) -> DeviceRule | None:
@@ -530,13 +524,8 @@ def parse_config(
             commander_section.get("fan_group", GROUP_FAR), "commander.fan_group"
         ),
     )
-    katana_section = payload.get("katana") or {}
-    katana = KatanaConfig(
-        enabled=bool(katana_section.get("enabled", False)),
-        group=_validate_sync_group(katana_section.get("group", GROUP_FAR), "katana.group"),
-        interval_seconds=_rate_interval(katana_section.get("rate_hz", 2.0), "katana.rate_hz"),
-        port=str(katana_section.get("port") or "").strip() or None,
-    )
+    if (payload.get("katana") or {}).get("enabled"):
+        raise ConfigError(REMOVED_KATANA_USB)
 
     katana_ha_section = payload.get("katana_ha") or {}
     katana_ha = KatanaHAConfig(
@@ -551,10 +540,6 @@ def parse_config(
     if katana_ha.enabled:
         if not katana_ha.url or not katana_ha.url.startswith(("http://", "https://")):
             raise ConfigError("katana_ha.url must be Home Assistant's base URL, e.g. http://192.168.10.2:8123")
-        if katana.enabled:
-            raise ConfigError(
-                "katana.enabled and katana_ha.enabled are both true: only one may drive the soundbar"
-            )
         if katana_ha.keepalive_seconds >= 10.0:
             raise ConfigError("katana_ha.keepalive_seconds must stay under HA's 10 s hand-over")
 
@@ -571,7 +556,6 @@ def parse_config(
         spread_bias=_fraction(spread_section.get("bias", 1.0), "spread.bias"),
         devices=tuple(rules),
         commander=commander,
-        katana=katana,
         katana_ha=katana_ha,
     )
 

@@ -36,13 +36,10 @@ class HidBindingTest(unittest.TestCase):
         self.assertEqual(len(hidapi), 1, "exactly one hidapi requirement")
         self.assertRegex(hidapi[0], r";\s*sys_platform\s*==\s*['\"]win32['\"]\s*$")
 
-    def test_the_katana_dependencies_apply_everywhere(self) -> None:
-        requirements = {_name(requirement): requirement for requirement in _dependencies()}
-        for name in ("pyserial", "cryptography"):
-            with self.subTest(name=name):
-                self.assertIn(name, requirements)
-                self.assertNotIn(";", requirements[name])
-
+    def test_nothing_else_is_declared(self) -> None:
+        # The USB Katana driver's pyserial and cryptography left with it on
+        # 2026-10-07; everything else is the standard library.
+        self.assertEqual([_name(requirement) for requirement in _dependencies()], ["hidapi"])
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

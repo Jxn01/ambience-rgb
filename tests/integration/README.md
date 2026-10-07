@@ -57,11 +57,16 @@ before believing any claim that the lights work -- including the first run on
 Windows, where the HID stack underneath is a different one.
 
 It covers both devices this project drives with its own code: the Commander Core,
-then the Katana soundbar. The soundbar phase writes each colour **once** -- the
-device holds its colour, unlike the AIO -- prints what the soundbar reports back
-alongside, and restores the colour it found. It refuses to run while the daemon
-is up, because exactly one process may drive each of these devices, and says how
-to stop it on the platform it is on.
+then the Katana soundbar -- which, since 2026-10-07, means posting each colour to
+Home Assistant's `sb_katana` integration, the way the daemon does. That phase
+first asks HA whether Screen sync is on (it stops there if not: HA would drop
+every colour), re-posts each colour every second so HA's 10-second hand-over
+cannot fire mid-colour, and prints HA's write and error counters afterwards. It
+does not restore the colour it found -- there is nothing to read it from; HA turns
+the bar off about 10 s after the last colour. It refuses to run while the daemon
+is up, because exactly one process may drive each of these devices (the daemon
+would overwrite the soundbar's test colours within a tenth of a second), and says
+how to stop it on the platform it is on.
 
 ## The first thing to check when the AIO is dark but everything looks healthy
 

@@ -105,31 +105,15 @@ enabled = true
 pump_group = "far"
 fan_group = "far"
 
-[katana]
-# The Sound Blaster Katana V2X soundbar, driven over its USB serial port by our
-# own driver (OpenRGB has none). It lights the desk, not the screen: "far".
-#
-# rate_hz is a CEILING, not a rate. A colour is sent only when it has really
-# changed, and an unchanged one is never re-sent, because the soundbar holds
-# its colour. Kept low deliberately: the soundbar remembers its lighting across
-# a power cycle, and whether every colour write reaches its flash is not known.
-# A write that is never sent cannot wear anything.
-#
-# On Linux it needs the udev rule scripts/install.sh installs, so that this user
-# can open the port and ModemManager leaves it alone. On Windows it is a COM port
-# from the inbox usbser driver and needs nothing -- but Windows opens a COM port
-# exclusively, so nothing else (Creative's app, for one) may be holding it.
-enabled = false   # since 2026-10-07 the soundbar is driven through Home Assistant: [katana_ha]
-group = "far"
-rate_hz = 2.0
-# port = "/dev/ttyACM0"   # or "COM3"; unset: found by its USB IDs, 041e:3283 or 041e:3260
-
 [katana_ha]
-# The same soundbar through Home Assistant's sb_katana integration, which owns it
-# over Bluetooth (github.com/Jxn01/ha-katana). Only colours are posted, to
+# The Sound Blaster Katana V2X soundbar's light bar, through Home Assistant's
+# sb_katana integration, which owns the soundbar over Bluetooth
+# (github.com/Jxn01/ha-katana). Only colours are posted, to
 # <url>/api/sb_katana/stream; HA rate-limits, writes them and turns the lights
-# off 10 s after the last frame. Exactly one of [katana] and [katana_ha] may be
-# enabled: two writers would fight over the light bar.
+# off 10 s after the last frame. It lights the desk, not the screen: "far".
+#
+# The USB serial driver that used to do this ([katana]) was removed on
+# 2026-10-07; a config that still enables it is refused with a pointer here.
 #
 # What is posted: a colour that has moved (at most rate_hz), an unchanged one
 # again every keepalive_seconds (it must stay under HA's 10 s hand-over), and

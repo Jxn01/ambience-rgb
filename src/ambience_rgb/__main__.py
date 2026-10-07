@@ -121,27 +121,44 @@ def _devices(config) -> int:
             except CommanderCoreError as error:
                 print(f"\n  Commander Core unavailable: {error}")
 
-    if config.katana.enabled:
-        from ambience_rgb.katana import Katana, KatanaError
-
-        header = (
-            f"\n  Sound Blaster Katana (own driver)        "
-            f"group={config.katana.group}, at most {1 / config.katana.interval_seconds:g} Hz"
-        )
-        if held:
-            print(header)
-            print(held_note)
-        else:
-            try:
-                # Read-only: a diagnostic must never black the soundbar on its way out.
-                with Katana(config.katana.port, read_only=True) as device:
-                    colour = "#%02x%02x%02x" % device.read_colour()
-                    print(header)
-                    print(f"      {device.model} on {device.path}, firmware {device.firmware}")
-                    print(f"      solo colour now {colour}")
-            except (KatanaError, OSError) as error:
-                print(f"\n  Katana unavailable: {error}")
+    if config.katana_ha.enabled:
+        _katana_ha(config.katana_ha)
     return 0
+
+
+def _katana_ha(katana) -> None:
+    """The soundbar through Home Assistant: ask HA, never the soundbar. Safe while the daemon runs."""
+
+    from ambience_rgb.ha_stream import HAStreamClient, HAStreamError, read_token
+
+    print(
+        f"\n  Sound Blaster Katana (through Home Assistant) "
+        f"group={katana.group}, at most {1 / katana.interval_seconds:g} Hz to {katana.url}"
+    )
+    try:
+        client = HAStreamClient(katana.url or "", read_token(katana.token_file), katana.timeout_seconds)
+        try:
+            status = client.status()
+        finally:
+            client.close()
+    except HAStreamError as error:
+        print(f"      unavailable: {error}")
+        return
+
+    def yes(key: str) -> str:
+        return "yes" if status.get(key) else "no"
+
+    print(
+        f"      Screen sync {'on' if status.get('screen_sync') else 'OFF'}, "
+        f"receiving {yes('receiving')}, soundbar connected {yes('available')}"
+    )
+    print(
+        f"      {status.get('frames_received', '?')} frames received, {status.get('frames_dropped', '?')} dropped, "
+        f"{status.get('writes_sent', '?')} writes sent, {status.get('write_errors', '?')} write errors"
+    )
+    if not status.get("screen_sync"):
+        print("      Warning: HA drops every colour while Screen sync is off. Switch it on in HA: any manual")
+        print("      lighting change there turns it off.")
 
 
 def main(argv: list[str] | None = None) -> int:

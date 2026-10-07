@@ -10,6 +10,7 @@ then followed by silence, so the hand-over turns the lights off.
 from __future__ import annotations
 
 import json
+import logging
 import tempfile
 import threading
 import unittest
@@ -37,13 +38,14 @@ class _FakeClient:
     def __init__(self) -> None:
         self.posts: list[tuple[int, int, int]] = []
         self.fail = False
+        self.accepted = True  # False: HA's Screen sync switch is off
         self.closed = 0
 
     def post(self, rgb) -> bool:
         if self.fail:
             raise HAStreamError("HA down")
         self.posts.append(tuple(rgb))
-        return True
+        return self.accepted
 
     def close(self) -> None:
         self.closed += 1
@@ -59,13 +61,17 @@ def _parse(payload: dict):
 def _config(**section):
     base = {"enabled": True, "url": "http://ha.local:8123"}
     base.update(section)
-    return _parse({"katana": {"enabled": False}, "katana_ha": base})
+    return _parse({"katana_ha": base})
 
 
-def _sink(clock=None, **section):
+def _sink(clock=None, logger=None, **section):
     client = _FakeClient()
     sink = KatanaHASink(
-        _config(**section).katana_ha, clock=clock or _Clock(), client_factory=lambda: client, start_worker=False
+        _config(**section).katana_ha,
+        logger,
+        clock=clock or _Clock(),
+        client_factory=lambda: client,
+        start_worker=False,
     )
     return sink, client
 
@@ -173,6 +179,34 @@ class KatanaHASinkTest(unittest.TestCase):
         sink.flush()  # the failed colour is still in the slot
         self.assertEqual(client.posts, [FAR])
 
+    def test_screen_sync_off_in_ha_is_said_once_and_its_return_once(self):
+        # Any manual lighting change in HA switches Screen sync off. The light bar
+        # then stops following the screen; without this nothing would say why.
+        logger = logging.getLogger("test.katana-ha.accepted")
+        clock = _Clock()
+        sink, client = _sink(clock, logger)
+        client.accepted = False
+        with self.assertLogs(logger, logging.INFO) as logs:
+            for colour in ((100, 0, 0), (0, 100, 0), (0, 0, 100)):
+                clock.now += 1
+                sink.write(colour, colour)
+                sink.flush()
+            client.accepted = True
+            for colour in ((100, 100, 0), (0, 100, 100)):
+                clock.now += 1
+                sink.write(colour, colour)
+                sink.flush()
+        self.assertEqual(len(client.posts), 5, "refused colours are still posted: the next one may land")
+        self.assertEqual([r.levelno for r in logs.records], [logging.WARNING, logging.INFO])
+        self.assertIn("Screen sync", logs.records[0].getMessage())
+
+    def test_an_accepting_ha_logs_nothing(self):
+        logger = logging.getLogger("test.katana-ha.quiet")
+        sink, _client = _sink(logger=logger)
+        with self.assertNoLogs(logger, logging.INFO):
+            sink.write(NEAR, FAR)
+            sink.flush()
+
     def test_release_holds_nothing(self):
         sink, client = _sink()
         sink.release()
@@ -191,8 +225,8 @@ class KatanaHAConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "katana_ha.url"):
             _parse({"katana_ha": {"enabled": True}})
 
-    def test_usb_and_ha_paths_are_mutually_exclusive(self):
-        with self.assertRaisesRegex(ConfigError, "only one may drive the soundbar"):
+    def test_the_removed_usb_path_is_refused_even_beside_this_one(self):
+        with self.assertRaisesRegex(ConfigError, "removed"):
             _parse({"katana": {"enabled": True}, "katana_ha": {"enabled": True, "url": "http://h:8123"}})
 
     def test_keepalive_must_beat_the_handover(self):
@@ -210,7 +244,9 @@ class KatanaHAConfigTest(unittest.TestCase):
 
         config = load_config(EXAMPLE_CONFIG)
         self.assertTrue(config.katana_ha.enabled)
-        self.assertFalse(config.katana.enabled)
+        import tomllib
+
+        self.assertNotIn("katana", tomllib.loads(EXAMPLE_CONFIG.read_text(encoding="utf-8")), "the USB section is gone")
 
 
 class TokenTest(unittest.TestCase):
@@ -236,19 +272,28 @@ class TokenTest(unittest.TestCase):
 
         from ambience_rgb.ha_stream import REPO_ROOT
 
-        result = subprocess.run(
-            ["git", "-C", str(REPO_ROOT), "check-ignore", "-q", ".ha-token"], check=False
-        )
+        try:
+            result = subprocess.run(["git", "-C", str(REPO_ROOT), "check-ignore", "-q", ".ha-token"], check=False)
+        except OSError as error:  # no git here (Wine); test_repo_hygiene skips the same way
+            raise unittest.SkipTest(f"git unavailable: {error}") from error
         self.assertEqual(result.returncode, 0, ".ha-token must be gitignored")
 
 
 class _Handler(BaseHTTPRequestHandler):
     seen: list = []
+    status: object = {"screen_sync": False, "receiving": False, "available": True}
 
     def do_POST(self):  # noqa: N802 - http.server API
         body = self.rfile.read(int(self.headers["Content-Length"]))
         type(self).seen.append((self.path, self.headers["Authorization"], json.loads(body)))
-        reply = json.dumps({"accepted": True}).encode()
+        self._reply({"accepted": True})
+
+    def do_GET(self):  # noqa: N802 - http.server API
+        type(self).seen.append((self.path, self.headers["Authorization"], None))
+        self._reply(type(self).status)
+
+    def _reply(self, answer):
+        reply = json.dumps(answer).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(reply)))
@@ -272,6 +317,7 @@ class HAStreamClientTest(unittest.TestCase):
             client.close()
         finally:
             server.shutdown()
+            server.server_close()
         self.assertEqual(
             _Handler.seen,
             [
@@ -279,6 +325,24 @@ class HAStreamClientTest(unittest.TestCase):
                 ("/api/sb_katana/stream", "Bearer tok", {"rgb": [4, 5, 6]}),
             ],
         )
+
+    def test_status_is_a_get_on_the_same_path(self):
+        server = HTTPServer(("127.0.0.1", 0), _Handler)
+        _Handler.seen = []
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = HAStreamClient(f"http://127.0.0.1:{server.server_port}", "tok")
+            self.assertEqual(client.status(), _Handler.status)
+            _Handler.status = ["not", "a", "dict"]
+            with self.assertRaises(HAStreamError):
+                client.status()
+            client.close()
+        finally:
+            _Handler.status = {"screen_sync": False, "receiving": False, "available": True}
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(_Handler.seen[0], ("/api/sb_katana/stream", "Bearer tok", None))
 
     def test_unreachable_raises(self):
         client = HAStreamClient("http://127.0.0.1:9", "tok", timeout_seconds=0.5)

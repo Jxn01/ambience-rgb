@@ -222,34 +222,34 @@ class SingleColourDeviceTest(unittest.TestCase):
     """The Commander Core and the Katana: devices configured by group, not by rule."""
 
     def test_the_katana_is_off_unless_asked_for(self) -> None:
-        # A config written before the Katana existed must not start retrying a
-        # missing serial port every ten seconds, forever.
-        katana = parse_config(MINIMAL).katana
+        # A config written before the Katana existed must not start posting to
+        # a Home Assistant it never named.
+        katana = parse_config(MINIMAL).katana_ha
         self.assertFalse(katana.enabled)
         self.assertEqual(katana.group, GROUP_FAR)
-        self.assertIsNone(katana.port)
 
-    def test_a_katana_section_parses(self) -> None:
-        katana = parse_config(
-            {**MINIMAL, "katana": {"enabled": True, "group": "near", "rate_hz": 4, "port": "/dev/ttyACM3"}}
-        ).katana
-        self.assertTrue(katana.enabled)
-        self.assertEqual(katana.group, GROUP_NEAR)
-        self.assertAlmostEqual(katana.interval_seconds, 0.25)
-        self.assertEqual(katana.port, "/dev/ttyACM3")
+    def test_the_removed_usb_driver_is_refused_and_says_what_replaced_it(self) -> None:
+        # Silently ignoring it would leave the light bar dark with no reason given.
+        for payload in (
+            {"katana": {"enabled": True}},
+            {"katana": {"enabled": True, "port": "COM3"}, "katana_ha": {"enabled": True, "url": "http://h:8123"}},
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaises(ConfigError) as caught:
+                    parse_config({**MINIMAL, **payload})
+                self.assertIn("[katana_ha]", str(caught.exception))
+                self.assertIn("removed", str(caught.exception))
 
-    def test_the_katana_rate_must_be_positive(self) -> None:
-        for rate in (0, -2, "fast"):
-            with self.subTest(rate=rate):
-                with self.assertRaises(ConfigError):
-                    parse_config({**MINIMAL, "katana": {"rate_hz": rate}})
+    def test_a_disabled_usb_section_left_in_an_old_config_is_harmless(self) -> None:
+        config = parse_config({**MINIMAL, "katana": {"enabled": False, "group": "far", "port": "/dev/ttyACM0"}})
+        self.assertFalse(config.katana_ha.enabled)
 
     def test_excluded_is_refused_where_it_cannot_mean_anything(self) -> None:
         # 🚨 These devices are written whole, so a group of "excluded" cannot
         # leave part of one alone. It used to be accepted -- and then quietly
         # driven with the FAR colour, the opposite of what it says.
         for section in (
-            {"katana": {"group": "excluded"}},
+            {"katana_ha": {"group": "excluded"}},
             {"commander": {"pump_group": "excluded"}},
             {"commander": {"fan_group": "excluded"}},
         ):
@@ -369,7 +369,6 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertEqual(config.openrgb_host, "127.0.0.1", "never bind the LAN")
         self.assertTrue(config.commander.enabled)
         # Since 2026-10-07 the soundbar goes through Home Assistant, not USB.
-        self.assertFalse(config.katana.enabled)
         self.assertTrue(config.katana_ha.enabled)
         self.assertEqual(config.katana_ha.group, GROUP_FAR, "it lights the desk, not the screen")
 

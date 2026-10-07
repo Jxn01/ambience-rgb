@@ -10,13 +10,15 @@ No amount of automated verification could see it. A person glancing at the case
 saw it instantly.
 
 So this drives a deliberate, memorable sequence on each device we drive with our
-own code -- the Commander Core, then the Katana soundbar -- and asks what you
-saw. Run it whenever a transport, the packet framing, or the report size
+own code -- the Commander Core, then the Katana soundbar through Home Assistant
+-- and asks what you saw. Run it whenever a transport, the packet framing, or the report size
 changes, and before believing any claim that the lights work. On Windows, run it
 with the venv's python from the repository, like every other command there.
 
 Stop the daemon first; this says how, on either platform. Exactly one process
-may drive each of these devices, so it refuses to run while the daemon is up.
+may drive each of these devices -- and the daemon's own posts to Home Assistant
+would overwrite the soundbar's test colours within a tenth of a second -- so it
+refuses to run while the daemon is up.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from ambience_rgb import hints  # noqa: E402
 from ambience_rgb.commander_core import CommanderCore  # noqa: E402
 from ambience_rgb.config import load_config  # noqa: E402
-from ambience_rgb.katana import Katana  # noqa: E402
+from ambience_rgb.ha_stream import HAStreamClient, HAStreamError, read_token  # noqa: E402
 from ambience_rgb.transport import is_listening  # noqa: E402
 
 HOLD_SECONDS = 6.0
@@ -122,48 +124,65 @@ def check_commander(config) -> bool | None:
 
 
 def check_katana(config) -> bool | None:
-    if not config.katana.enabled:
-        print("katana.enabled is false; skipping the soundbar\n")
+    katana = config.katana_ha
+    if not katana.enabled:
+        print("katana_ha.enabled is false; skipping the soundbar\n")
         return None
 
     _announce(
-        "Watch the soundbar's light bar. Each colour is written ONCE and must hold\n"
-        "on its own for the whole period -- unlike the Commander Core, the soundbar\n"
-        "keeps its colour. In this order:\n"
+        "Watch the soundbar's light bar. Each colour goes to Home Assistant, which\n"
+        f"writes it over Bluetooth ({katana.url}). In this order:\n"
     )
     print("\nStarting in 3s.\n")
     time.sleep(3)
 
-    device = Katana(config.katana.port).open()
-    print(f"open; {device.model} on {device.path}, firmware {device.firmware}")
-    before = device.read_colour()
-    print(f"its colour before the check: {_hex(before)}\n")
     try:
-        device.prepare()
+        client = HAStreamClient(katana.url or "", read_token(katana.token_file), katana.timeout_seconds)
+    except HAStreamError as error:
+        print(f"Home Assistant unavailable: {error}\n")
+        return False
+    try:
+        status = client.status()
+        print(f"Home Assistant: Screen sync {'on' if status.get('screen_sync') else 'OFF'}, "
+              f"soundbar connected {'yes' if status.get('available') else 'NO'}\n")
+        if not status.get("screen_sync"):
+            print(
+                "Screen sync is off in Home Assistant, so it would drop every colour.\n"
+                "Switch it on there (Sound Blaster Katana V2X -> Screen sync) and run this again.\n"
+            )
+            return False
         for name, colour in SEQUENCE:
-            device.set_colour(colour)
-            # Software's opinion, printed so a mismatch between it and your eyes
-            # is visible -- but it is not the evidence. Your eyes are.
-            print(f"  holding {name}; the soundbar reports {_hex(device.read_colour())}", flush=True)
-            time.sleep(HOLD_SECONDS)
-        # The soundbar acknowledges every write (5A 02 0A 3A 00 ...), so about
-        # one per colour set is normal -- more than that is worth a look.
-        print(f"\n  ({device.unsolicited} frames arrived unasked; the soundbar ACKs every write)")
+            # Re-posted every second: HA turns the lights off 10 s after the last
+            # frame, and a single post must not be the only thing holding a colour.
+            deadline = time.monotonic() + HOLD_SECONDS
+            print(f"  holding {name}", flush=True)
+            while time.monotonic() < deadline:
+                if not client.post(colour):
+                    print("  Home Assistant stopped accepting colours -- was Screen sync switched off?")
+                    return False
+                time.sleep(1.0)
+        after = client.status()
+        print(
+            f"\n  Home Assistant counted {after.get('writes_sent', '?')} writes, "
+            f"{after.get('write_errors', '?')} write errors."
+        )
+    except HAStreamError as error:
+        print(f"Home Assistant unavailable: {error}\n")
+        return False
     finally:
-        # Put back what it showed before, then let go WITHOUT blacking it.
-        try:
-            device.set_colour(before)
-        finally:
-            device.release()
+        client.close()
 
-    print(f"\nDone; the soundbar is back to {_hex(before)}.\n")
+    print(
+        "\nDone. Nothing restores the colour from before: Home Assistant turns the light\n"
+        "bar off about 10 s from now, and the daemon takes over again once it is started.\n"
+    )
     if _ask("Did you see all four colours on the soundbar, in order?"):
         return True
     print(
         "Not confirmed.\n"
-        "If the soundbar REPORTED each colour but did not show it, the protocol\n"
-        "reached it and the lights did not follow: check its lighting is switched\n"
-        "on at the device, and that nothing else (Creative's app) is driving it.\n"
+        "If Home Assistant counted the writes but the bar did not show them, the frames\n"
+        "reached the soundbar and its lighting did not follow: check the Lighting entity\n"
+        "in HA and that nothing else (Creative's app) is driving it.\n"
     )
     return False
 

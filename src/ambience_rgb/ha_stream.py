@@ -4,6 +4,7 @@
 access token. That endpoint, not the ``sb_katana.stream_frame`` service, on
 purpose: every service call is a recorded ``call_service`` event, and at 10 Hz
 that is tens of thousands of database rows an hour. The endpoint records nothing.
+``GET`` on the same path answers the stream's status, for ``ambience-rgb devices``.
 
 The token is read from ``$AMBIENCE_RGB_HA_TOKEN``, or ``token_file`` in the config,
 or else ``.ha-token`` at the root of this checkout -- gitignored, and on the drive
@@ -77,9 +78,17 @@ class HAStreamClient:
         """Send one colour. Returns HA's ``accepted`` (False while Screen sync is off)."""
 
         body = json.dumps({"rgb": [int(c) for c in rgb]})
+        return bool(self._request("POST", body).get("accepted"))
+
+    def status(self) -> dict:
+        """The stream's status: ``screen_sync``, ``receiving``, ``available`` and counters. Changes nothing."""
+
+        return self._request("GET", None)
+
+    def _request(self, method: str, body: str | None) -> dict:
         try:
             conn = self._connection()
-            conn.request("POST", self._prefix + STREAM_PATH, body=body, headers=self._headers)
+            conn.request(method, self._prefix + STREAM_PATH, body=body, headers=self._headers)
             response = conn.getresponse()
             payload = response.read()
         except (OSError, http.client.HTTPException) as error:
@@ -89,9 +98,12 @@ class HAStreamClient:
             self.close()
             raise HAStreamError(f"Home Assistant answered {response.status}: {payload[:200]!r}")
         try:
-            return bool(json.loads(payload).get("accepted"))
+            answer = json.loads(payload)
         except ValueError as error:
             raise HAStreamError(f"Unexpected answer from Home Assistant: {payload[:200]!r}") from error
+        if not isinstance(answer, dict):
+            raise HAStreamError(f"Unexpected answer from Home Assistant: {payload[:200]!r}")
+        return answer
 
     def close(self) -> None:
         if self._conn is not None:

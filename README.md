@@ -1,5 +1,11 @@
 # ambience-rgb
 
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://www.kernel.org/)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows%2011-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://www.microsoft.com/windows)
+[![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![OpenRGB](https://img.shields.io/badge/OpenRGB-SDK-E1301E?style=for-the-badge)](https://openrgb.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)](LICENSE)
+
 Ambient screen-to-light sync for the RGB hardware **inside** your case, driven by
 the colours [matterlights](https://github.com/Jxn01/matterlights) has already
 computed for your Matter bulbs. The lamps and the case show the same thing,

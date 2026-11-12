@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PATTERNS = {
     "alarm emoji": re.compile("\U0001F6A8"),
     "a dated note": re.compile(r"(?<![\w.-])20\d\d-(?:0[1-9]|1[0-2])-[0-3]\d(?![\dT:])"),
-    "an attribution": re.compile(r"\(owner\b|\bowner's (?:list|request|decision|call|rule|rig|machine)\b"
+    "an attribution": re.compile(r"\(owner[,)]|\bowner's (?:list|request|decision|call|rule|rig|machine)\b"
                                  r"|\bthe owner (?:asked|said|wants|wanted|decided|chose|confirmed|watched)\b"),
     "a private reference": re.compile(r"(?<!\d )(?<!\d)\bKB\b(?! ?/s)|claude-kb|superpowers|EXECUTION-LOG|\bspec §|§\d"),
 }
@@ -69,6 +69,8 @@ class NoDevelopmentNotes(unittest.TestCase):
                 self.assertTrue(PATTERNS[name].search(sample))
         self.assertFalse(PATTERNS["a dated note"].search('started_at = "2026-10-11T12:00:00+00:00"'))   # data, not a note
         self.assertFalse(PATTERNS["a private reference"].search("a 64 KB receive buffer"))               # a size
+        self.assertFalse(PATTERNS["an attribution"].search("recorded in (owner.json)"))                  # a file name
+        self.assertTrue(PATTERNS["an attribution"].search("# a soft chime (owner, 2026-10-11)"))
 
 
 if __name__ == "__main__":  # pragma: no cover

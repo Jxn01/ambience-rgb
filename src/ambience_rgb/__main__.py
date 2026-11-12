@@ -30,7 +30,7 @@ def _log_handler(log_file: Path | None) -> logging.Handler:
         # Under systemd the journal adds its own timestamps, so the format stays
         # bare; run by hand it is still readable.
         return _stream_handler(stream)
-    # 🚨 pythonw -- what the Windows tasks run, so that no console window flashes
+    # pythonw -- what the Windows tasks run, so that no console window flashes
     # up at logon -- has no stderr at all. sys.stderr is None there, and a
     # stream handler on it drops every line without a word. So: a file.
     target = log_file if log_file is not None else paths.default_log_path()

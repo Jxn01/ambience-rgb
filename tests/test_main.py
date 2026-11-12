@@ -1,6 +1,6 @@
 """The command line: the flags the Windows tasks depend on, and logging without a console.
 
-🚨 **pythonw has no stderr.** The Windows tasks run the daemon under
+**pythonw has no stderr.** The Windows tasks run the daemon under
 ``pythonw.exe`` so that no console window flashes up at logon, and there
 ``sys.stderr`` is ``None``: a ``StreamHandler`` pointed at it drops every line,
 silently. So without a console the log goes to a file, and these tests hold

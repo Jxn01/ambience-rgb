@@ -1,6 +1,6 @@
 # ambience-rgb configuration.
 #
-# This file describes the AUTHOR'S hardware. It is the shipped fallback so a
+# This file describes one specific rig's hardware. It is the shipped fallback so a
 # fresh checkout runs without setup -- it is not a template you must match.
 #
 # Copy to ~/.config/ambience-rgb/config.toml to describe yours; that path wins
@@ -29,12 +29,11 @@ udp_port = 45731
 host = "127.0.0.1"
 port = 6742
 
-# 🚨 This server can stop driving hardware while still answering perfectly.
-#
-# Observed 2026-09-10: round trips at 0.1 ms, new connections served, seven
-# controllers reported -- and three consecutive colour writes with no visible
-# effect on any device. The daemon's liveness probe cannot detect that, because
-# the server IS live. Reconnecting does not help either. Only a restart did.
+# This server can stop driving hardware while still answering perfectly: round
+# trips at 0.1 ms, new connections served, every controller reported -- and
+# colour writes with no visible effect on any device. The daemon's liveness
+# probe cannot detect that, because the server IS live, and reconnecting does
+# not help either. Only a restart does.
 #
 # So after three reconnects inside two minutes the daemon runs this, at most
 # once every five minutes. A plain list applies on every platform; a table picks
@@ -43,10 +42,9 @@ port = 6742
 # every device, including ones held at a static colour.
 [openrgb.restart_command]
 linux = ["systemctl", "--user", "restart", "ambience-rgb-openrgb.service"]
-# ⚠️ Stop, then WAIT for the task to leave "Running", then start. The task's
+# Stop, then WAIT for the task to leave "Running", then start. The task's
 # policy is IgnoreNew, so a start issued while the stop is still in flight is
-# silently dropped and the server simply stays down -- the trap matterlights hit
-# with its own tasks. The wait is bounded at ten seconds.
+# silently dropped and the server simply stays down. The wait is bounded at ten seconds.
 windows = [
     "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
     "Stop-ScheduledTask -TaskName ambience-rgb-openrgb; $n = 0; while ((Get-ScheduledTask -TaskName ambience-rgb-openrgb).State -eq 'Running' -and $n -lt 50) { Start-Sleep -Milliseconds 200; $n++ }; Start-ScheduledTask -TaskName ambience-rgb-openrgb",
@@ -60,7 +58,7 @@ usb_hz = 20.0
 smbus_hz = 4.0
 
 [colour]
-# 🚨 These deliberately make the LEDs DIFFER from the bulbs in the numbers, so
+# These deliberately make the LEDs DIFFER from the bulbs in the numbers, so
 # that they match to the eye.
 #
 # A bulb is a diffuse area source across a room; an LED is a point source at full
@@ -88,7 +86,7 @@ group_cohesion = 0.55
 #   0.0  the raw palette gradient, ignoring near/far entirely
 #
 # The engine clusters each frame into a weighted palette of up to four colours
-# and then collapses it, because six bulbs cannot show more. This rig has a
+# and then collapses it, because six bulbs cannot show more. The reference rig has a
 # 97-LED motherboard header and three 8-LED fan rings; a middling bias puts the
 # palette back as a gradient while keeping the near/far split, which is a real
 # choice about which hardware lights the screen and which lights the room.
@@ -112,8 +110,8 @@ fan_group = "far"
 # <url>/api/sb_katana/stream; HA rate-limits, writes them and turns the lights
 # off 10 s after the last frame. It lights the desk, not the screen: "far".
 #
-# The USB serial driver that used to do this ([katana]) was removed on
-# 2026-10-07; a config that still enables it is refused with a pointer here.
+# The USB serial driver that used to do this ([katana]) was removed; a config
+# that still enables it is refused with a pointer here.
 #
 # What is posted: a colour that has moved (at most rate_hz), an unchanged one
 # again every keepalive_seconds (it must stay under HA's 10 s hand-over), and
@@ -122,7 +120,7 @@ fan_group = "far"
 #
 # The token is a Home Assistant long-lived access token, read from
 # $AMBIENCE_RGB_HA_TOKEN, or token_file, or else .ha-token at the root of this
-# checkout -- gitignored, never committed, and read by both halves of the rig.
+# checkout -- gitignored and never committed.
 enabled = true
 group = "far"
 url = "http://192.168.10.2:8123"
@@ -160,7 +158,7 @@ group = "far"
 bus = "usb"
 zones = { "IO Cover" = "near", "PCB" = "near" }
 
-# 🚨 Red and green are swapped in TWO places for this board, and the two must
+# Red and green are swapped in TWO places for this board, and the two must
 # move together. OpenRGB swaps a zone whenever the board's own table OR its
 # settings file says so -- the file can force a swap on, never off -- and with
 # that swap on, every one of these five zones shows red as green. The table is
@@ -169,17 +167,14 @@ zones = { "IO Cover" = "near", "PCB" = "near" }
 # OpenRGB's swap pinned on for all five (openrgb_rg_swap -- the installers write
 # it into OpenRGB.json) and all five swapped back here.
 #
-# 🚨 Change one, change the other, and re-run the installer. On the first
-# Windows boot the headers showed green for red although OpenRGB.json said
-# false -- the board's bits for them read set -- and pinning them true changed
-# nothing, which looked exactly like the setting being ignored. Linux, with the
-# same file, had read those bits clear and needed no GRB on the headers.
+# Change one, change the other, and re-run the installer. The board's own bits
+# for the headers can read set on one OS and clear on another, so pinning the
+# setting true can look like it changed nothing when it was already on.
 #
-# Verified by sending pure primaries through the daemon's pipeline and looking,
-# 2026-09-11, with both keys as below: pure red and pure green each showed as
-# themselves on all five zones and everywhere else. Per ZONE, not per device:
-# PCH and the two 12 V RGB headers are left to OpenRGB, and none of them has
-# been checked by eye.
+# Verified by sending pure primaries through the daemon's pipeline with both
+# keys as below: pure red and pure green each showed as themselves on all five
+# zones. Per ZONE, not per device: PCH and the two 12 V RGB headers are left to
+# OpenRGB, and none of them has been checked by eye.
 zone_channel_order = { "IO Cover" = "GRB", "PCB" = "GRB", "Addressable Header 1" = "GRB", "Addressable Header 2" = "GRB", "Addressable Header 3/Audio" = "GRB" }
 openrgb_rg_swap = ["IO Cover", "PCB", "Addressable Header 1", "Addressable Header 2", "Addressable Header 3/Audio"]
 
@@ -188,7 +183,7 @@ match = "Razer Naga"
 group = "far"
 bus = "usb"
 
-# Explicitly excluded by the owner: the numpad keeps its own white.
+# Explicitly excluded: the numpad keeps its own white.
 #
 # `static` sets it once per connection instead of syncing it. Without that,
 # "excluded" means nothing ever writes to it -- and OpenRGB's Direct mode does

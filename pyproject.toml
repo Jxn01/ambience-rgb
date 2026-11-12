@@ -22,8 +22,8 @@ requires-python = ">=3.11"
 # Windows wheels cover every CPython this supports, so nothing is compiled.
 #
 # Nothing else: the Sound Blaster Katana is reached through Home Assistant over
-# the standard library's http.client. (Its USB serial driver, and with it
-# pyserial and cryptography, was removed on 2026-10-07.)
+# the standard library's http.client. (Its former USB serial driver, and
+# with it pyserial and cryptography, was removed.)
 dependencies = [
     "hidapi>=0.14; sys_platform == 'win32'",
 ]

@@ -3,7 +3,7 @@
 No third-party client library. The protocol is a length-prefixed binary format
 that takes about a hundred lines to speak, and the alternative is an AUR package
 whose version has to track the server's. Everything here was verified against
-the running server on this rig.
+a running server.
 
 The server owns the hardware; this is purely a client. That split is forced,
 not chosen: **exactly one process may hold a given HID device**, and when two
@@ -17,7 +17,7 @@ Protocol notes worth keeping:
 * ``REQUEST_CONTROLLER_DATA`` takes the protocol version the client wants; this
   asks for 3 and parses 3. Asking for a version and parsing another silently
   misaligns every field after the mode block.
-* ⚠️ **RESIZEZONE is 1000, not 1102.** 1102 is SAVEMODE. Sending 1102 expecting
+* **RESIZEZONE is 1000, not 1102.** 1102 is SAVEMODE. Sending 1102 expecting
   a resize does nothing useful, and sending a genuine resize to a controller
   with no zones crashes OpenRGB 1.0rc3 outright with ``std::out_of_range``.
 """
@@ -110,7 +110,7 @@ class Controller:
     def direct_mode(self) -> Mode | None:
         """The mode that makes per-LED writes take effect, if the device has one.
 
-        Named "Direct" on every controller on this rig, but the fallback matters:
+        Named "Direct" on every controller seen so far, but the fallback matters:
         a device with no such mode (some keyboards call it "Custom") should still
         get its closest equivalent rather than nothing.
         """
@@ -264,19 +264,13 @@ class OpenRGBClient:
     def _receive(self, expected: int | None = None) -> bytes:
         """Read the reply to ``expected``, absorbing unsolicited packets first.
 
-        🚨 **The next packet on this socket is not necessarily your reply.** The
+        **The next packet on this socket is not necessarily your reply.** The
         server pushes ``DEVICE_LIST_UPDATED`` on its own initiative -- notably
         the instant detection finishes, which is exactly when this client is
         most likely to be mid-request. Reading blindly hands that notification
         back as if it were the answer, and every later reply is then off by one:
         a controller count parsed from a zone record, a device description
         parsed from a count. Nothing raises; the numbers are simply wrong.
-
-        This was latent for as long as the client existed. It stayed invisible
-        because the one call that could hit it -- the health probe -- discarded
-        whatever came back, so the desync silently corrected itself one request
-        later. Reading the probe's value turned it into a visible
-        ``unpack requires a buffer of 4 bytes``.
 
         Passing ``expected`` makes the pairing explicit, so a desync raises here
         rather than becoming a plausible wrong answer somewhere downstream.
@@ -321,7 +315,7 @@ class OpenRGBClient:
     def _negotiate_protocol(self) -> int:
         """Agree a protocol version with the server, and remember it.
 
-        🚨 **Skipping this desyncs the connection the moment you write a mode.**
+        **Skipping this desyncs the connection the moment you write a mode.**
         The server keeps a protocol version *per client* and defaults it to 0
         until this handshake happens. Asking for a controller description at
         version 3 still returns a version-3 record -- that request carries its
@@ -331,10 +325,10 @@ class OpenRGBClient:
         become the header of the next packet.
 
         The connection then never recovers. The server sits waiting for a
-        payload length it invented, our packets pile up unread -- 238 kB of them
-        were measured -- and every reply we wait for never comes, while other
-        clients are served normally at 0.1 ms. It presents as "the OpenRGB
-        server is wedged", and it is not: only our stream is.
+        payload length it invented, our packets pile up unread (hundreds of kB),
+        and every reply we wait for never comes, while other clients are served
+        normally. It looks like "the OpenRGB server is wedged", but only our
+        stream is.
 
         Every description is requested at the negotiated version and every mode
         echoed back at the same one, so the two cannot drift apart.
@@ -377,7 +371,7 @@ class OpenRGBClient:
     def set_custom_mode(self, device: int) -> None:
         """Ask the SERVER to select the controller's custom mode.
 
-        🚨 **This does not reach the hardware, and the name invites you to think
+        **This does not reach the hardware, and the name invites you to think
         it does.** OpenRGB's server handles ``SETCUSTOMMODE`` by assigning
         ``active_mode`` on its own in-memory controller and nothing else -- it
         never calls ``UpdateMode()``. The device is never told, so it keeps
@@ -395,16 +389,15 @@ class OpenRGBClient:
 
         Returns ``(lag_seconds, controller_count)``.
 
-        🚨 **The count is not a bonus -- it is the other half of the check.** The
-        probe below has always sent ``REQUEST_CONTROLLER_COUNT`` and thrown the
-        reply away, which proved the server was *answering* but said nothing
-        about what it was answering *about*. OpenRGB accepts connections before
+        **The count is not a bonus -- it is the other half of the check.** Checking
+        only that a ``REQUEST_CONTROLLER_COUNT`` reply arrives proves the server
+        is *answering* but says nothing about what it is answering *about*. OpenRGB accepts connections before
         device detection finishes, so a client that connects at login can plan
         against one controller out of seven, and every subsequent health check
         agrees it is perfectly healthy. Reading the number that is already on the
         wire costs no extra packet and closes that hole.
 
-        🚨 **The only honest backpressure signal available.** Writes are
+        **The only honest backpressure signal available.** Writes are
         fire-and-forget and, on loopback, our own send queue reads zero even
         while the server has hundreds of kilobytes of our packets unread -- the
         bytes simply move into its receive buffer. Locally everything looks

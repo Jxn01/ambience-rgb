@@ -19,21 +19,19 @@ Device: Corsair Commander Core, USB ``1b1c:0c32``, HID interface 0.
 
 from __future__ import annotations
 
-# 🚨 **64-byte reports, and this number is load-bearing in a way that gives you
-# no feedback when it is wrong.**
+# **64-byte reports. A wrong value gives no feedback.**
 #
 # The device's own HID report descriptor settles it -- `75 08 96 40 00` is
 # Report Size 8 bits x Report Count 0x0040, so both the input and output reports
 # are 64 bytes. OpenRGB agrees: PID 0x0C32 is its COMMANDER_CORE2 and selects
 # PACKET_SIZE_V3 = 65, which is these 64 bytes plus hidapi's report-id byte.
 #
-# This was 96 for a long time, and everything *looked* fine: the four-byte
-# command header sits at the front of every packet, so it always arrived intact
-# and every command was acknowledged, LED counts read back correctly, and the
-# topology was right. Only the colour payload -- which lives past the header and
-# spans many packets -- was being cut off, so the LEDs simply never lit while the
-# protocol reported perfect health. Nothing in the transport can detect this;
-# only the hardware can, by staying dark.
+# With a larger size everything still *looks* fine: the four-byte command
+# header sits at the front of every packet, so it arrives intact, every command
+# is acknowledged and LED counts read back correctly. Only the colour payload --
+# which lives past the header and spans many packets -- is cut off, so the LEDs
+# never light while the protocol reports perfect health. Nothing in the
+# transport can detect this; only the hardware can, by staying dark.
 #
 # Read it from the descriptor rather than assuming:
 #   od -An -tx1 /sys/class/hidraw/hidrawN/device/report_descriptor
@@ -65,8 +63,8 @@ DATA_TYPE_DIRECT_COLOUR = (0x12, 0x00)
 PUMP_LEDS = 29
 PORT_COUNT = 6
 # Every port occupies 34 slots in the buffer whatever is plugged into it,
-# because SetFanMode puts the controller in "6 QL fan" mode. Attached fans on
-# this rig have 8 LEDs; the remaining slots must be written black, never left
+# because SetFanMode puts the controller in "6 QL fan" mode. Attached fans
+# have 8 LEDs; the remaining slots must be written black, never left
 # to carry colour, or ports appear to bleed into one another.
 PORT_SLOTS = 34
 COLOUR_BUFFER_LENGTH = PUMP_LEDS * 3 + PORT_COUNT * PORT_SLOTS * 3  # 699
@@ -94,7 +92,7 @@ def endpoint_write_packets(
 ) -> list[bytes]:
     """The full open -> write -> close sequence for one endpoint write.
 
-    ⚠️ **No read-back.** liquidctl's ``_write_data`` begins by reading the
+    **No read-back.** liquidctl's ``_write_data`` begins by reading the
     endpoint to confirm the data type, which is a good guard for the endpoints
     it uses -- but the lighting endpoint never answers a read, so that check
     hangs. OpenRGB does open/write/close with no read, and so does this.
@@ -186,7 +184,7 @@ def parse_led_counts(data: bytes) -> list[int | None]:
     ``None`` rather than 0, so "nothing plugged in" stays distinguishable from
     "attached but reporting zero LEDs".
 
-    ⚠️ Read this **before** forcing fan mode. Afterwards the controller can
+    Read this **before** forcing fan mode. Afterwards the controller can
     report the 34 slots it exposes rather than the LEDs that physically exist,
     and writing colour to all 34 would light nothing while looking correct.
     """

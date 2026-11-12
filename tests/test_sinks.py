@@ -80,14 +80,13 @@ _PER_ZONE = [
 
 
 class ChangeFilterTest(unittest.TestCase):
-    """🚨 Regression guard: an unchanged colour must not be resent every tick.
+    """An unchanged colour must not be resent every tick.
 
     Writing all eleven targets on every tick offered the server ~43 packets a
     second. It applies them one at a time against real USB and SMBus devices,
     far slower than that, so the backlog grew without bound and the board
-    displayed a colour from minutes earlier. Across a display-off period it went
-    on displaying black long after the screen came back -- which reads exactly
-    like "the RGB is dead", and did.
+    displayed a colour from minutes earlier, even black long after the screen
+    came back.
     """
 
     def setUp(self) -> None:
@@ -112,7 +111,7 @@ class ChangeFilterTest(unittest.TestCase):
         self.assertEqual([w[2][0] for w in client.writes], [NEAR, (99, 99, 99)])
 
     def test_a_jitter_smaller_than_the_epsilon_is_ignored(self) -> None:
-        """🚨 Exact equality is not enough: the ambient colour moves a unit or
+        """Exact equality is not enough: the ambient colour moves a unit or
         two every frame, which resent all eleven targets every tick and overran
         the server just as badly as no filter at all."""
 
@@ -141,7 +140,7 @@ class ChangeFilterTest(unittest.TestCase):
         self.assertEqual(len(client.writes), 2)
 
     def test_a_split_controller_is_one_packet_carrying_every_zone(self) -> None:
-        """🚨 Six zone writes stalled OpenRGB's ASRock controller outright; the
+        """Six zone writes stalled OpenRGB's ASRock controller outright; the
         same colours as one whole-device array ran clean."""
 
         sink, client = _sink(_BOARD)
@@ -217,12 +216,12 @@ class BusRateLimitTest(unittest.TestCase):
 
 
 class HealthCheckTest(unittest.TestCase):
-    """🚨 A wedged server is invisible without a round trip.
+    """A wedged server is invisible without a round trip.
 
     On loopback our own send queue reads zero while the server sits on hundreds
     of kilobytes of unread packets -- the bytes just move into its receive
-    buffer. That happened for real: the server stopped reading, every log line
-    stayed clean, and the case froze on an old frame.
+    buffer: if the server stops reading, every log line stays clean and the case
+    freezes on an old frame.
     """
 
     def setUp(self) -> None:
@@ -244,10 +243,10 @@ class HealthCheckTest(unittest.TestCase):
         self.assertEqual(len(client.writes), 1)
 
     def test_a_shrunken_device_list_is_re_planned_not_accepted(self) -> None:
-        # The real incident: OpenRGB accepts connections before detection has
-        # finished, so the daemon planned against 1 controller of 7 at login and
-        # every later probe agreed it was healthy. It drove the RAM and nothing
-        # else, indefinitely, with a clean log.
+        # OpenRGB accepts connections before detection has finished, so a daemon
+        # can plan against 1 controller of 7 at login while every later probe
+        # agrees it is healthy -- driving the RAM and nothing else, with a clean
+        # log.
         client = _FakeClient(lag=0.01, controllers=7)
         sink = self._sink_with(client)
         sink._planned_controllers = 1
@@ -341,10 +340,10 @@ if __name__ == "__main__":  # pragma: no cover
 class StaticColourTest(unittest.TestCase):
     """A `static` device is set once per connection, never on the tick loop.
 
-    🚨 The reason it exists: OpenRGB's Direct mode does not persist, so every
-    restart of the server left the excluded keyboard dark -- and "excluded"
-    meant nothing would ever put it back. It had to be fixed by hand each time,
-    including after our own recovery restarts.
+    The reason it exists: OpenRGB's Direct mode does not persist, so every
+    restart of the server leaves an excluded keyboard dark -- and "excluded"
+    means nothing would ever put it back, including after our own recovery
+    restarts.
     """
 
     def setUp(self) -> None:
@@ -408,13 +407,13 @@ class StaticColourTest(unittest.TestCase):
 
 
 class DeadSocketTest(unittest.TestCase):
-    """🚨 A connection error must drop the client, not just be reported.
+    """A connection error must drop the client, not just be reported.
 
     The resilient wrapper catches the exception but cannot clear the sink's
     client, so a dead socket would be reused for every later write -- failing
     identically each time. Only the health check ever reconnected, which costs
-    six timeouts. Measured as ~30 s of darkness after an OpenRGB restart, on top
-    of the retry backoff.
+    six timeouts: ~30 s of darkness after an OpenRGB restart, on top of the
+    retry backoff.
     """
 
     def setUp(self) -> None:
@@ -456,13 +455,13 @@ class DeadSocketTest(unittest.TestCase):
 
 
 class ReleaseOnFailureTest(unittest.TestCase):
-    """🚨 Both sinks must drop a handle whose last operation failed.
+    """Both sinks must drop a handle whose last operation failed.
 
     ResilientSink retries on a timer but cannot reach inside to invalidate the
     handle, so without this a dead socket or HID handle is reused for every
-    retry and fails identically forever. The OpenRGB side took 71 s to recover
-    from a server restart because of it; the Commander side had no rescue at all
-    and would never have reopened an unplugged AIO.
+    retry and fails identically forever. Without it the OpenRGB side takes 71 s
+    to recover from a server restart, and the Commander side would never reopen
+    an unplugged AIO.
     """
 
     def setUp(self) -> None:
@@ -490,7 +489,7 @@ class ReleaseOnFailureTest(unittest.TestCase):
             with released_on_failure(sink):
                 raise ValueError("device fell off the bus")
         self.assertEqual(sink.released, 1)
-        self.assertEqual(sink.closed, 0, "🚨 close() writes black; a failure must not")
+        self.assertEqual(sink.closed, 0, "close() writes black; a failure must not")
 
     def test_it_does_nothing_on_success(self) -> None:
         from ambience_rgb.sinks import released_on_failure
@@ -565,14 +564,14 @@ class ReleaseOnFailureTest(unittest.TestCase):
 
 
 class ExitPathBlackTest(unittest.TestCase):
-    """🚨 black() is what every exit path writes, so the retry backoff must not skip it.
+    """black() is what every exit path writes, so the retry backoff must not skip it.
 
-    Observed 2026-09-10, to the microsecond: SIGTERM at .553151; the Commander
-    write in flight fails at .553378 -- hidapi reports the interrupted poll() as
-    "read error" -- which marks the sink degraded; "RGB off; stopped" at .553560.
-    Blacking a HID device takes milliseconds. It took 0.18 ms because it never
-    happened: the backoff meant for normal ticks swallowed the shutdown's black,
-    and the AIO was left to drift back to its firmware rainbow.
+    SIGTERM can land while a Commander write is in flight; hidapi reports the
+    interrupted poll() as "read error", which marks the sink degraded a fraction
+    of a millisecond before the shutdown blacks it. Blacking a HID device takes
+    milliseconds, so a black that returns in 0.18 ms never happened: the backoff
+    meant for normal ticks swallowed it, and the AIO drifts back to its firmware
+    rainbow.
     """
 
     def setUp(self) -> None:
@@ -625,10 +624,10 @@ class ExitPathBlackTest(unittest.TestCase):
 
 
 class CommanderWritesEveryTickTest(unittest.TestCase):
-    """🚨 The Commander Core must be written on EVERY tick, unfiltered.
+    """The Commander Core must be written on EVERY tick, unfiltered.
 
     It has no off state and no memory: about ten seconds after the last commit
-    it reverts to its firmware pattern, which on this rig is green fans. The
+    it reverts to its firmware pattern, which on a typical setup is green fans. The
     change filter that makes the OpenRGB sink cheap would therefore turn the AIO
     green on any static screen. This test exists so that "why does this one
     resend the same colour?" is answered before someone optimises it.
@@ -681,7 +680,7 @@ class CommanderWritesEveryTickTest(unittest.TestCase):
 
 
 class PaletteReachesTheWireTest(unittest.TestCase):
-    """🚨 The guard for a feature that was fully built and never connected.
+    """The guard for a feature that was fully built and never connected.
 
     render.spread was correct and unit-tested, the config parsed, the daemon
     extracted the palette -- and OpenRGBSink.write called _send_colours without
@@ -744,7 +743,7 @@ class PaletteReachesTheWireTest(unittest.TestCase):
         self.assertEqual(len(client.writes), 1, "a moving palette must keep being written")
 
     def test_a_palette_that_gains_or_loses_a_colour_is_resent(self) -> None:
-        """🚨 Signatures were compared with zip(), which stops at the shorter one
+        """Signatures were compared with zip(), which stops at the shorter one
         -- so a colour joining the palette was no change at all, and the gradient
         waited for the refresh timer to show it."""
 
@@ -790,7 +789,7 @@ class ChannelOrderReachesTheWireTest(unittest.TestCase):
         self.assertEqual(set(client.writes[0][2]), {(0, 255, 96)})
 
     def test_segments_on_one_device_can_differ(self) -> None:
-        """🚨 The whole point: the ASRock wires its own LEDs differently from
+        """The whole point: the ASRock wires its own LEDs differently from
         the fan headers hanging off it."""
 
         sink, client = self._sink(
@@ -813,12 +812,11 @@ class ChannelOrderReachesTheWireTest(unittest.TestCase):
 
 
 class WedgeEscalationTest(unittest.TestCase):
-    """🚨 Reconnecting does not fix a server that answers but drives nothing.
+    """Reconnecting does not fix a server that answers but drives nothing.
 
-    Observed 2026-09-10: round trips at 0.1 ms, new connections served, seven
-    controllers reported -- and three consecutive colour writes with no effect on
-    any device. The liveness probe cannot see it, because the server IS live.
-    Only a restart recovered, and until now only a human could do that.
+    Round trips at 0.1 ms, new connections served, every controller reported --
+    and colour writes with no effect on any device. The liveness probe cannot see
+    it, because the server IS live. Only a restart recovers it.
     """
 
     def setUp(self) -> None:
@@ -875,7 +873,7 @@ class WedgeEscalationTest(unittest.TestCase):
         self.assertEqual(seen, [])
 
     def test_the_cooldown_prevents_a_restart_loop(self) -> None:
-        """A restart loop is worse than a frozen rig -- it also resets every
+        """A restart loop is worse than a frozen case -- it also resets every
         device, including ones held at a static colour."""
 
         import subprocess
@@ -932,10 +930,10 @@ class WedgeEscalationTest(unittest.TestCase):
 
 
 class CommanderContentionTest(unittest.TestCase):
-    """🚨 OpenRGB driving the Commander Core as well is silent.
+    """OpenRGB driving the Commander Core as well is silent.
 
     Two drivers on one HID device: zones read as size 0, colours never apply,
-    no error anywhere -- which cost this rig a day. The installers turn off
+    no error anywhere. The installers turn off
     OpenRGB's detector for it BY NAME, and another OpenRGB version could use
     another name. So whenever OpenRGB lists a Commander Core while our own
     driver is on, the daemon says so at every connect.

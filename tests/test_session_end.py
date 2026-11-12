@@ -1,18 +1,17 @@
 """The Windows session-end window: its decisions, on either platform.
 
-This rig boots Linux or Windows, never both, so the Windows code cannot be run
-where it is written. What CAN run anywhere is its decision logic: the window
-procedure and the console handler are plain Python methods that receive message
-numbers. On Linux a thin fake stands in for the Win32 calls they make -- every
+The Windows code cannot be run where it is written (Linux). What CAN run anywhere is its decision logic: the
+window procedure and the console handler are plain Python methods that receive
+message numbers. On Linux a thin fake stands in for the Win32 calls they make -- every
 entry point answers "1, fine", except ``GetMessageW``, which answers "quit" so
 the message pump ends at once instead of spinning. On Windows the very same
 tests run against the real ``user32`` and ``kernel32``, and the factory test
 creates a real hidden window.
 
-⚠️ **What this cannot tell you:** whether Windows really delivers these
-messages to this window at a session end. matterlights measured that it does at
-logoff and does not at shutdown; that is why the shutdown task exists, and it
-takes a real Windows restart to prove.
+**What this cannot tell you:** whether Windows really delivers these
+messages to this window at a session end. It does at logoff and does not at
+shutdown; that is why the shutdown task exists, and it takes a real Windows
+restart to prove.
 """
 
 from __future__ import annotations
@@ -145,7 +144,7 @@ class WindowProcedureTest(unittest.TestCase):
         self.assertEqual(self.reasons, ["WM_QUERYENDSESSION"])
 
     def test_the_end_holds_the_session_until_the_hardware_is_black(self) -> None:
-        """🚨 Windows may end the process the moment WM_ENDSESSION returns."""
+        """Windows may end the process the moment WM_ENDSESSION returns."""
 
         threading.Timer(0.15, self.finished.set).start()
         started = time.monotonic()

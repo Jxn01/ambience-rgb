@@ -81,8 +81,7 @@ class ParsingTest(unittest.TestCase):
 
     def test_every_rejection_is_a_config_error(self) -> None:
         # The CLI turns a ConfigError into a clean one-line message and exit 2.
-        # A bare ValueError from a helper escapes that and prints a traceback,
-        # which is how a typo in saturation used to present.
+        # A bare ValueError from a helper escapes that and prints a traceback.
         for section in (
             {"colour": {"saturation": 0}},
             {"colour": {"group_cohesion": 2}},
@@ -203,11 +202,11 @@ class RestartCommandTest(unittest.TestCase):
         self.assertIn("linux", str(caught.exception))
 
     def test_a_string_is_refused_rather_than_run_letter_by_letter(self) -> None:
-        """🚨 ``tuple("systemctl restart x")`` is a tuple of CHARACTERS.
+        """``tuple("systemctl restart x")`` is a tuple of CHARACTERS.
 
-        It used to be accepted, and the restart then ran a program called ``s``
-        -- which does not exist, so the one recovery for a wedged server failed
-        with nothing in the log but a FileNotFoundError.
+        Accepted, the restart would run a program called ``s`` -- which does not
+        exist, so the one recovery for a wedged server would fail with nothing in
+        the log but a FileNotFoundError.
         """
 
         with self.assertRaises(ConfigError):
@@ -245,9 +244,9 @@ class SingleColourDeviceTest(unittest.TestCase):
         self.assertFalse(config.katana_ha.enabled)
 
     def test_excluded_is_refused_where_it_cannot_mean_anything(self) -> None:
-        # 🚨 These devices are written whole, so a group of "excluded" cannot
-        # leave part of one alone. It used to be accepted -- and then quietly
-        # driven with the FAR colour, the opposite of what it says.
+        # These devices are written whole, so a group of "excluded" cannot
+        # leave part of one alone; it would be driven with the FAR colour, the
+        # opposite of what it says.
         for section in (
             {"katana_ha": {"group": "excluded"}},
             {"commander": {"pump_group": "excluded"}},
@@ -363,12 +362,12 @@ class SearchPathTest(unittest.TestCase):
 class ShippedConfigTest(unittest.TestCase):
     """The example config is the fallback, so it must actually be valid -- everywhere."""
 
-    def test_it_parses_and_describes_this_rig(self) -> None:
+    def test_it_parses_and_describes_the_shipped_hardware(self) -> None:
         config = load_config(SHIPPED)
 
         self.assertEqual(config.openrgb_host, "127.0.0.1", "never bind the LAN")
         self.assertTrue(config.commander.enabled)
-        # Since 2026-10-07 the soundbar goes through Home Assistant, not USB.
+        # The soundbar goes through Home Assistant, not USB.
         self.assertTrue(config.katana_ha.enabled)
         self.assertEqual(config.katana_ha.group, GROUP_FAR, "it lights the desk, not the screen")
 
@@ -396,13 +395,13 @@ class ShippedConfigTest(unittest.TestCase):
                 self.assertEqual(config.rule_for(name).bus, "smbus")
 
     def test_it_loads_on_windows_without_a_posix_only_call(self) -> None:
-        """🚨 The shipped config used to crash Windows before a single light lit.
+        """The shipped config must not crash Windows at load.
 
         Its socket path is ``$XDG_RUNTIME_DIR/...``. With that variable unset --
-        as it always is on Windows -- the fallback called ``os.getuid()``, which
-        does not exist there: an ``AttributeError`` at config load, on every
-        start, for every entry point including the shutdown task. Windows uses
-        UDP, so the path must not even be looked at.
+        as it always is on Windows -- a fallback calling ``os.getuid()`` would
+        raise ``AttributeError`` at config load, on every start, for every entry
+        point including the shutdown task. Windows uses UDP, so the path must not
+        even be looked at.
         """
 
         posix_only = AssertionError("a POSIX-only call was made while loading for Windows")
@@ -431,7 +430,7 @@ class ShippedConfigTest(unittest.TestCase):
 class OpenRgbRgSwapTest(unittest.TestCase):
     """``openrgb_rg_swap``: the zones whose red/green swap OpenRGB is made to do.
 
-    🚨 Two layers swap red and green on an ASRock Polychrome board, and they
+    Two layers swap red and green on an ASRock Polychrome board, and they
     must move together. OpenRGB swaps a zone when the board's own table OR its
     settings file says so -- ``rgswap = table_bit || setting`` in
     ``PolychromeUSBController::SetDeviceInfo`` -- so the file can force a swap
@@ -465,15 +464,15 @@ class OpenRgbRgSwapTest(unittest.TestCase):
                     parse_config({**MINIMAL, "devices": [{"match": "x", "openrgb_rg_swap": value}]})
 
     def test_every_zone_the_shipped_config_swaps_back_is_one_openrgb_swaps(self) -> None:
-        """🚨 The pairing guard: a zone swapped back must be one OpenRGB swaps.
+        """The pairing guard: a zone swapped back must be one OpenRGB swaps.
 
         The config's ``GRB`` undoes OpenRGB's red/green swap -- but only while
         that swap is on, and unpinned it is the board's table's call, which
         differs between boots: OpenRGB itself writes zeros into it on entering
-        Direct mode, and on the first Windows boot it read set for the headers
-        where Linux had read it clear. Pinned in ``OpenRGB.json``, the swap
-        holds on every OpenRGB and every boot. A ``GRB`` without the pin comes
-        out swapped once wherever the table reads clear: green for red.
+        Direct mode, and it can read set on one OS and clear on another. Pinned
+        in ``OpenRGB.json``, the swap holds on every OpenRGB and every boot. A
+        ``GRB`` without the pin comes out swapped once wherever the table reads
+        clear: green for red.
         """
 
         config = load_config(SHIPPED)
@@ -489,19 +488,18 @@ class OpenRgbRgSwapTest(unittest.TestCase):
                 self.assertIn(zone, rule.openrgb_rg_swap)
 
     def test_on_this_board_every_pinned_zone_is_swapped_back(self) -> None:
-        """🚨 The five zones -- and on THIS board, the pin and the GRB are one set.
+        """The five zones -- and on THIS board, the pin and the GRB are one set.
 
         With OpenRGB's swap on, all five ASRock zones show red as green, and the
         swap can be forced on but never off. So all five are pinned on and all
         five are sent GRB: the one state that does not depend on the board's
-        table, which differs between boots. On the first Windows boot the
-        headers showed green for red although OpenRGB.json said false -- the
-        board's bits for them read set -- and pinning them on changed nothing,
-        by eye with pure red and pure blue. Linux had read those bits clear.
+        table, which differs between boots. The board's bits for the headers can
+        read set on one OS and clear on another, so a pin can look like it
+        changed nothing when it was already on.
 
         Not a universal rule -- LEDs that take their bytes as RGB would want the
-        pin without the GRB -- but a fact of this rig. PCH and the two 12 V RGB
-        headers are left to OpenRGB: none of them was ever checked by eye.
+        pin without the GRB -- but a fact of this board. PCH and the two 12 V RGB
+        headers are left to OpenRGB: none of them has been checked by eye.
         """
 
         rule = load_config(SHIPPED).rule_for("ASRock X870E Taichi")

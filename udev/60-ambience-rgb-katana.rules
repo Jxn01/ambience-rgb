@@ -4,9 +4,8 @@
 # that is an "Abstract (modem)" interface, so an active ModemManager probes it
 # with AT commands -- not something to send to a soundbar.
 #
-# Until 2026-10-07 this rule also tagged the port `uaccess`, because ambience-rgb
-# drove the light bar through it. The soundbar is driven through Home Assistant
-# now (over Bluetooth), nothing opens this port, and so nobody is granted it.
+# The port is not tagged `uaccess`: the soundbar is driven through Home
+# Assistant (over Bluetooth), nothing opens this port, so nobody is granted it.
 # Verify with `udevadm info /dev/ttyACM0 | grep ID_MM_DEVICE_IGNORE`.
 SUBSYSTEM=="tty", ATTRS{idVendor}=="041e", ATTRS{idProduct}=="3283", ENV{ID_MM_DEVICE_IGNORE}="1"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="041e", ATTRS{idProduct}=="3260", ENV{ID_MM_DEVICE_IGNORE}="1"

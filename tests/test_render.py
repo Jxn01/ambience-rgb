@@ -17,7 +17,7 @@ def value_of(colour):
 
 
 class TreatTest(unittest.TestCase):
-    """🚨 Why this exists: a bulb and an LED showing the same numbers do not look
+    """Why this exists: a bulb and an LED showing the same numbers do not look
     the same. Pale shades that read as tinted on a diffuse lamp read as plain
     white on a point-source strip at full output."""
 
@@ -36,7 +36,7 @@ class TreatTest(unittest.TestCase):
         self.assertEqual(out, (226, 255, 226))
 
     def test_gamma_does_NOT_dim_a_colour_already_at_peak(self) -> None:
-        """⚠️ 1.0 ** gamma == 1.0. Gamma tints a blown-out frame, it does not
+        """1.0 ** gamma == 1.0. Gamma tints a blown-out frame, it does not
         calm one -- worth knowing before reaching for it to fix brightness."""
 
         pale = (240, 255, 240)
@@ -64,7 +64,7 @@ class TreatTest(unittest.TestCase):
 
 
 class SpreadTest(unittest.TestCase):
-    """🚨 The whole point of payload v2: 97 LEDs showing one averaged colour is
+    """The whole point of payload v2: 97 LEDs showing one averaged colour is
     a waste of 97 LEDs."""
 
     PALETTE = [((255, 0, 0), 0.5), ((0, 0, 255), 0.3), ((0, 255, 0), 0.2)]
@@ -180,9 +180,9 @@ class CohereTest(unittest.TestCase):
 
 
 class ChannelOrderTest(unittest.TestCase):
-    """🚨 One controller can wire its zones differently from each other.
+    """One controller can wire its zones differently from each other.
 
-    Verified on this rig by sending pure primaries and looking: through the
+    Verified by sending pure primaries and looking: through the
     red/green swap OpenRGB makes on the ASRock X870E Taichi's zones, a zone it
     swaps shows RED when sent green and GREEN when sent red. Which zones those
     are is the board's table's call as much as OpenRGB's setting -- on Linux

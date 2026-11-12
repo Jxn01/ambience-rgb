@@ -1,4 +1,4 @@
-"""Stream for a while and check the rig is still following.
+"""Stream for a while and check the hardware is still following.
 
 The unit tests run in milliseconds against fakes. Three of this project's worst
 bugs only appeared under *sustained* streaming and were invisible in any shorter

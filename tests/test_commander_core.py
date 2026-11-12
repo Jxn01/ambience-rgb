@@ -22,8 +22,7 @@ def reassemble_colour_payload(written: list[bytes]) -> bytes:
 
     A colour write spans one 0x06 packet carrying 87 bytes after its 6-byte
     header, then 0x07 continuation packets of 93 bytes each. Reading only the
-    first packet -- as an earlier version of this test did -- sees offset 87
-    as empty and reports a false failure.
+    first packet would see offset 87 as empty.
     """
 
     start = max(i for i, p in enumerate(written) if p[2] == 0x06)
@@ -111,16 +110,15 @@ class _Opened(CommanderCore):
 
 
 class NonBlockingDrainTest(unittest.TestCase):
-    """🚨 The drain must not wait -- and a timed read on an empty queue does.
+    """The drain must not wait -- and a timed read on an empty queue does.
 
-    Measured on the Windows half, 2026-09-11: hidapi's ``read(64, 1)`` on an
-    empty queue took 15.5 ms there, not 1 ms, and the driver drained before each
-    of the ~14 exchanges in a colour frame. A frame cost 218 ms, 97% of it
-    waiting, which held the daemon to 4.4 ticks a second -- under matterlights'
-    5 -- and the frames it could not keep up with queued in its socket, minutes
-    deep. In non-blocking mode ``read(64)`` returned in 0.00 ms, while a read
-    that names a timeout still waited for its reply. (hidraw on Linux returns
-    the same 1 ms read in 1 ms, which is why this never showed there.)
+    On Windows, hidapi's ``read(64, 1)`` on an empty queue takes 15.5 ms, not
+    1 ms, and the driver drains before each of the ~14 exchanges in a colour
+    frame: 218 ms a frame, 97% of it waiting, which holds the daemon to 4.4 ticks
+    a second -- under matterlights' 5 -- so frames queue in its socket. In
+    non-blocking mode ``read(64)`` returns in 0.00 ms, while a read that names a
+    timeout still waits for its reply. (hidraw on Linux returns the same 1 ms
+    read in 1 ms, so it does not show there.)
     """
 
     def _open(self) -> tuple[CommanderCore, FakeHid]:
@@ -270,7 +268,7 @@ class DiscoveryTest(unittest.TestCase):
     per USB interface and always knows its number. Windows hidapi lists one entry
     per HID top-level COLLECTION and does not always know the interface number.
     Both report the usage from the report descriptor, and there the two differ:
-    ``0xFF42``/``0x0001`` is control -- read off this rig's own descriptors,
+    ``0xFF42``/``0x0001`` is control -- read off the device's own descriptors,
     ``06 42 ff 09 01`` on hidraw20 and ``06 42 ff 09 02`` on hidraw21.
     """
 
@@ -397,12 +395,11 @@ class DrainTest(unittest.TestCase):
     def test_a_timeout_free_read_only_ever_meets_a_non_blocking_handle(self) -> None:
         """``read(n)`` BLOCKS FOREVER on a blocking handle in cython-hidapi; it does not poll.
 
-        Written that way on a blocking handle, the drain hung the daemon outright
-        -- which is why it once read with a 1 ms timeout instead. That timeout
-        cost 15.5 ms a read on Windows (see NonBlockingDrainTest), so the drain
-        now reads with no timeout, on a handle open() has made non-blocking. This
-        pins the pairing, asserted rather than trusted to survive a tidy-up:
-        every timeout-free read must find the handle non-blocking.
+        On a blocking handle the drain would hang the daemon outright, and a 1 ms
+        timeout instead costs 15.5 ms a read on Windows (see
+        NonBlockingDrainTest). So the drain reads with no timeout, on a handle
+        open() has made non-blocking. This pins the pairing: every timeout-free
+        read must find the handle non-blocking.
         """
 
         fake = FakeHid()
@@ -435,16 +432,15 @@ class DrainTest(unittest.TestCase):
 
 
 class AnotherMasterTest(unittest.TestCase):
-    """🚨 A reply to a wake/sleep this driver never sent means another process is on it.
+    """A reply to a wake/sleep this driver never sent means another process is on it.
 
-    Observed 2026-09-10: CoolerControl picked up a newly installed liquidctl at boot
-    and began polling the Commander Core. liquidctl brackets every operation with
-    WAKE and SLEEP (``01 03 00 02`` / ``01 03 00 01``); SLEEP is hardware mode, so
-    the AIO flickered between our colours and its firmware rainbow every second or
-    two, and hidraw -- which has no exclusive open -- handed liquidctl's replies to
-    both readers. The daemon logged ``Reply 0x01 does not acknowledge command 0x0d``
-    fifty-seven times: true, and useless, because it names neither the cause nor
-    the check.
+    With CoolerControl's liquidctl integration polling the Commander Core,
+    liquidctl brackets every operation with WAKE and SLEEP (``01 03 00 02`` /
+    ``01 03 00 01``); SLEEP is hardware mode, so the AIO flickers between our
+    colours and its firmware rainbow every second or two, and hidraw -- which has
+    no exclusive open -- hands liquidctl's replies to both readers. A plain
+    ``Reply 0x01 does not acknowledge command 0x0d`` is true, and useless,
+    because it names neither the cause nor the check.
     """
 
     def _answering_with(self, reply_command: int) -> _Opened:
@@ -486,13 +482,12 @@ if __name__ == "__main__":  # pragma: no cover
 
 
 class ReadOnlyInspectionTest(unittest.TestCase):
-    """⚠️ A diagnostic must not mutate the thing it inspects.
+    """A diagnostic must not mutate the thing it inspects.
 
     Exactly one process may hold this device. ``ambience-rgb devices`` opening it
     normally forces fan mode on the way in and writes black on the way out --
-    which, with the daemon driving, fought it over the single handle and
-    surfaced as ``Reply 0x01 does not acknowledge command 0x07``. Observed for
-    real while debugging, from the debugging itself.
+    which, with the daemon driving, fights it over the single handle and
+    surfaces as ``Reply 0x01 does not acknowledge command 0x07``.
     """
 
     def test_a_read_only_close_does_not_black_the_device(self) -> None:
@@ -521,13 +516,13 @@ class ReadOnlyInspectionTest(unittest.TestCase):
 
 
 class EndpointRetryTest(unittest.TestCase):
-    """🚨 A dropped acknowledgement must not take the AIO out of service.
+    """A dropped acknowledgement must not take the AIO out of service.
 
     Under sustained streaming this controller occasionally fails to answer a
-    continuation packet inside the read timeout -- measured at ~0.4% of frames,
-    one every 45 s at 5 Hz during a twelve-minute soak. Propagated, each miss
-    took the sink out for its retry window, which is long enough for the fans to
-    revert to firmware green and flash.
+    continuation packet inside the read timeout (~0.4% of frames was measured
+    in one soak). Propagated, each miss would take the sink out for its retry
+    window, which is long enough for the fans to revert to firmware green and
+    flash.
     """
 
     class _FlakyHid(FakeHid):
@@ -581,14 +576,14 @@ class EndpointRetryTest(unittest.TestCase):
 
 
 class ReadTimeoutBudgetTest(unittest.TestCase):
-    """🚨 The reply timeout is a latency budget for the WHOLE daemon.
+    """The reply timeout is a latency budget for the WHOLE daemon.
 
     The loop is single-threaded, so a failed exchange spends the entire timeout
     with the OpenRGB sink waiting behind it. At 1000 ms one bad frame stalled the
     loop for three seconds across the retries and made the motherboard miss its
     colour as well -- a fault in one device surfacing as a fault in another.
 
-    Measured on this rig over 2020 exchanges: p50 3.0 ms, p99 3.0 ms, max 49 ms.
+    Measured over 2020 exchanges: p50 3.0 ms, p99 3.0 ms, max 49 ms.
     """
 
     def test_the_timeout_is_generous_but_not_a_stall(self) -> None:
@@ -609,14 +604,12 @@ class ReadTimeoutBudgetTest(unittest.TestCase):
 
 
 class ReleaseDoesNotBlackTest(unittest.TestCase):
-    """🚨 Letting go of a broken handle must not turn the hardware off.
+    """Letting go of a broken handle must not turn the hardware off.
 
-    close() blacks the device first, which is right for a clean shutdown. The
-    recovery path called it too -- so every transient failure explicitly
-    darkened the AIO it was trying to rescue, then reopened it. With this
-    controller's 0xF0 bursts arriving every ~25 s, the device spent its life
-    being blacked, and the owner reported simply that "the commander doesn't
-    light up".
+    close() blacks the device first, which is right for a clean shutdown. If the
+    recovery path called it too, every transient failure would darken the AIO it
+    was trying to rescue, then reopen it. With this controller's 0xF0 bursts
+    arriving every ~25 s, the device would spend its life being blacked.
     """
 
     def test_release_writes_nothing(self) -> None:

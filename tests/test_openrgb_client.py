@@ -1,9 +1,8 @@
 """The SDK client's parsing and its mode handling.
 
-These exist because the two bugs that made the rig look dead for a whole day
-both lived in this file and neither was covered: the parser threw away the mode
-table, and ``set_custom_mode`` claimed to put hardware into direct mode while
-sending a packet that never reaches the device.
+Two behaviours are pinned here: the parser must keep the mode table, and
+``set_custom_mode`` must not be mistaken for putting hardware into direct mode,
+since it sends a packet that never reaches the device.
 """
 
 from __future__ import annotations
@@ -128,13 +127,13 @@ class _RecordingClient(OpenRGBClient):
 
 
 class DirectModeTest(unittest.TestCase):
-    """🚨 The regression guard for the bug that made this look dead.
+    """A device only leaves its firmware effect when it is sent UPDATE_MODE.
 
     ``SETCUSTOMMODE`` is handled by the OpenRGB server by assigning
     ``active_mode`` on its own in-memory controller. It never calls
     ``UpdateMode()``, so the device is never told and keeps running its firmware
-    effect -- while every readback of the server reports "Direct". The ASUS GPU
-    cycled its rainbow for a full day behind exactly that.
+    effect -- while every readback of the server reports "Direct". A GPU can keep
+    cycling its rainbow behind exactly that.
     """
 
     def _client(self, modes: list[str]) -> _RecordingClient:
@@ -171,7 +170,7 @@ class DirectModeTest(unittest.TestCase):
 
 
 class ProtocolNegotiationTest(unittest.TestCase):
-    """🚨 The server keeps a protocol version PER CLIENT, defaulting to 0.
+    """The server keeps a protocol version PER CLIENT, defaulting to 0.
 
     Descriptions still come back at whatever version the *request* asks for, so
     skipping the handshake looks harmless -- right up until a mode is written
@@ -228,12 +227,12 @@ if __name__ == "__main__":  # pragma: no cover
 class UnsolicitedPacketTest(unittest.TestCase):
     """The server talks when it was not asked to, and the client must cope.
 
-    🚨 **This is a desync bug, not a noise problem.** ``DEVICE_LIST_UPDATED``
+    **This is a desync bug, not a noise problem.** ``DEVICE_LIST_UPDATED``
     arrives unbidden -- most often the moment detection finishes, which is
     precisely when this client is issuing requests. A reader that assumes the
     next packet is its own reply hands that notification back as the answer and
     every subsequent reply is off by one. Nothing raises. The controller count
-    is read out of a zone record and simply looks like a smaller rig.
+    is read out of a zone record and simply looks like a smaller device list.
     """
 
     class _Stream:

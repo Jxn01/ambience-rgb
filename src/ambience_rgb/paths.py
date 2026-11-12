@@ -2,14 +2,13 @@
 
 Modelled on matterlights' ``paths`` module, and bound by the same rule.
 
-⚠️ **NOTHING HERE MAY RAISE.** The log path is decided before logging exists,
+**NOTHING HERE MAY RAISE.** The log path is decided before logging exists,
 and on Windows the shutdown task runs as SYSTEM, in an environment nothing like
 a login shell's. ``Path.home()`` is the trap: on POSIX it falls back to the
 password database and effectively cannot fail, while on Windows it is purely
 environmental -- ``USERPROFILE``, or ``HOMEDRIVE`` plus ``HOMEPATH`` -- and
 raises ``RuntimeError`` when none of them is set. A lookup that is provably safe
-from Linux is a live exception path over there, which is exactly how a startup
-crash once shipped in matterlights. So every function degrades to a worse
+from Linux is a live exception path over there. So every function degrades to a worse
 answer instead: a log in the temp directory beats a daemon that will not start.
 
 ``platform`` and ``environ`` are parameters so that every branch -- Windows ones

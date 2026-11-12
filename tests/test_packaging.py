@@ -1,6 +1,6 @@
 """What pip may install -- which is the opposite on the two platforms.
 
-🚨 On Linux the ``hid`` binding is the distribution's (``python-hidapi``),
+On Linux the ``hid`` binding is the distribution's (``python-hidapi``),
 reached through a ``--system-site-packages`` venv, and pip must never be allowed
 near it: the PyPI package named ``hid`` is a DIFFERENT library that shadows the
 system one and dies with ``module 'hid' has no attribute 'device'``. On Windows
@@ -37,8 +37,8 @@ class HidBindingTest(unittest.TestCase):
         self.assertRegex(hidapi[0], r";\s*sys_platform\s*==\s*['\"]win32['\"]\s*$")
 
     def test_nothing_else_is_declared(self) -> None:
-        # The USB Katana driver's pyserial and cryptography left with it on
-        # 2026-10-07; everything else is the standard library.
+        # The USB Katana driver's pyserial and cryptography left with it;
+        # everything else is the standard library.
         self.assertEqual([_name(requirement) for requirement in _dependencies()], ["hidapi"])
 
 if __name__ == "__main__":  # pragma: no cover

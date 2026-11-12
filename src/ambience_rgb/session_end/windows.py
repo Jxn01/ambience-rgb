@@ -1,9 +1,7 @@
 """The hidden window that hears the Windows session end.
 
 See :mod:`ambience_rgb.session_end` for what this covers and -- more
-importantly -- what it does not. Adapted from matterlights'
-``shutdown_hook/windows.py``: the window and the message loop are the same, the
-reactions differ.
+importantly -- what it does not.
 
 It is a normal top-level window that is never shown, not a message-only window:
 message-only windows are not enumerated as top-level windows and so never

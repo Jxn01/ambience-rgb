@@ -1,17 +1,12 @@
 """Nothing secret-shaped may be tracked by git.
 
-🚨 **A `.gitignore` entry of `.env` does not cover `.env.bak-040827`.**
+**A `.gitignore` entry of `.env` does not cover `.env.bak-040827`.**
 
-That is not a hypothetical: on 2026-09-10 the sibling project matterlights
-committed and pushed a timestamped backup of its live `.env` -- carrying a
-working 183-character Home Assistant long-lived access token -- while its
-repository was public. The ignore rule said `.env`, which is an exact filename
-match, so every derivative walked straight past it.
-
-This repository has never tracked a credential, and this test is what keeps that
-true. It is deliberately identical to the one in matterlights: the two projects
-are deployed together, and a rule that only one of them enforces is a rule that
-the other will eventually break.
+The ignore rule says `.env`, which is an exact filename match, so a timestamped
+backup of a live `.env` walks straight past it. This test keeps credentials out
+of the tracked tree. It is deliberately identical to the one in matterlights:
+the two projects are deployed together, and a rule that only one of them
+enforces is a rule that the other will eventually break.
 
 It checks the two independent ways a secret gets in: by **filename** (a file that
 is obviously a credential store) and by **content** (a token-shaped string in a
@@ -19,14 +14,12 @@ file nobody thought of as a credential store).
 
 **It is a `unittest.TestCase`, not bare pytest functions,** because the
 documented command is `python -m unittest discover -s tests` and that command
-does not see pytest functions at all. As first written, this file ran zero tests
-under it and the suite still said OK: a guard the documented command skips
+does not see pytest functions at all: a guard the documented command skips
 guards nothing. pytest collects a `TestCase` just the same.
 
 **On the patterns being built by concatenation:** a literal JWT prefix written
 out in this file would be found by this file's own sweep, and the test would fail
-forever on itself. Same class as ``pgrep -f`` matching the shell that runs it.
-Assembling the needle at runtime means it never exists contiguously on disk.
+forever on itself. Assembling the needle at runtime means it never exists contiguously on disk.
 """
 
 from __future__ import annotations

@@ -13,8 +13,7 @@ the same as sending them the same numbers.
 
 **Depth.** The engine clusters each frame into a weighted palette of up to four
 colours and then collapses it to one colour per group, because six bulbs cannot
-show more than six colours. This rig has a 97-LED motherboard header and three
-8-LED fan rings. :func:`spread` puts the palette back, as a gradient, so a strip
+show more than six colours. A motherboard header can have 97 LEDs and a fan ring 8. :func:`spread` puts the palette back, as a gradient, so a strip
 shows the frame's actual colours instead of their average.
 
 Both are pure functions over plain tuples: no device, no socket, no config
@@ -45,7 +44,7 @@ def treat(colour: RGB, *, saturation: float = 1.0, gamma: float = 1.0) -> RGB:
     raising each to a power costs the *weaker* channels proportionally more, so
     ``(240, 255, 240)`` becomes ``(226, 255, 226)`` -- 5.9% saturated to 11.4%.
 
-    ⚠️ It does **not** dim a colour whose peak channel is already 255, because
+    It does **not** dim a colour whose peak channel is already 255, because
     ``1.0 ** gamma == 1.0``. Gamma tints a blown-out frame; it does not calm one.
     Anything below full does darken. 1.0 disables it.
 
@@ -87,19 +86,17 @@ _CHANNEL_INDEX = {"R": 0, "G": 1, "B": 2}
 def apply_channel_order(colour: RGB, order: str) -> RGB:
     """Reorder our ``(r, g, b)`` into the order a zone needs to be sent in.
 
-    🚨 **Not every zone comes out the same way, even on one controller.** On
-    this rig OpenRGB swaps red and green on the ASRock X870E Taichi's zones
-    whenever the board's own table or its settings say so, and on the five that
-    carry LEDs here the swap turns red into green. ``openrgb_rg_swap`` pins that
+    **Not every zone comes out the same way, even on one controller.** OpenRGB swaps red and green on the ASRock X870E Taichi's
+    zones whenever the board's own table or its settings say so, and on the five
+    that carry LEDs the swap turns red into green. ``openrgb_rg_swap`` pins that
     swap on -- it cannot be pinned off -- and the five are sent **GRB**, which
     swaps them back. Verified by sending pure primaries and looking: red showed
     green, green showed red, blue showed blue.
 
     The option is per ZONE, not per device, because a controller's zones need
-    not agree. On Linux, whose board table read the headers' bits clear, only IO
-    Cover and PCB were swapped, and a pink screen at ``(255, 0, 96)`` came out
-    ``(0, 255, 96)``, a vivid green-cyan, on those two zones while every other
-    zone showed the correct pink. The two swaps must move together; see
+    not agree: if only IO Cover and PCB are swapped, a pink screen at
+    ``(255, 0, 96)`` comes out ``(0, 255, 96)``, a vivid green-cyan, on those two
+    zones while every other zone shows the correct pink. The two swaps must move together; see
     ``openrgb_rg_swap`` in ``config.py``.
 
     ``order`` names which of our channels drives each of the device's outputs,

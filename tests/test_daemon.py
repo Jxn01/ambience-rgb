@@ -33,7 +33,7 @@ class ColourDecisionTest(unittest.TestCase):
         self.assertEqual(Daemon.colours_for(FRAME, stale=False), (NEAR, FAR))
 
     def test_the_lamp_master_switch_does_NOT_silence_the_rgb(self) -> None:
-        """The owner's explicit choice: the RGB has its own switch.
+        """The RGB has its own switch.
 
         Turning the bulbs off at night must not also kill the case lighting.
         This is the one flag in the payload that is carried but not obeyed.
@@ -155,8 +155,8 @@ class OpenRgbEmptyPlanTest(unittest.TestCase):
 
     The OpenRGB server binds its socket before device detection finishes, so a
     daemon that starts alongside it can connect to a server that knows about no
-    devices yet. Treating that as success left the whole rig dark until someone
-    restarted the daemon by hand.
+    devices yet. Treating that as success would leave the whole case dark until
+    someone restarted the daemon by hand.
     """
 
     def setUp(self) -> None:
@@ -199,7 +199,7 @@ if __name__ == "__main__":  # pragma: no cover
 class MalformedColourTest(unittest.TestCase):
     """A bad frame must be ignored, not passed on to the hardware.
 
-    🚨 Checking the length alone is not enough: ``tuple("red")[:3]`` is
+    Checking the length alone is not enough: ``tuple("red")[:3]`` is
     ``('r', 'e', 'd')`` -- three items, passes a length check, and then fails
     inside the sink when the channels are packed. That degrades the sink on
     every tick, so one malformed frame takes the lights down rather than being
@@ -232,13 +232,11 @@ class MalformedColourTest(unittest.TestCase):
 
 
 class StaleThresholdTest(unittest.TestCase):
-    """🚨 The staleness window must clear the publisher's worst blocking call.
+    """The staleness window must clear the publisher's worst blocking call.
 
-    It was 3.0 s while matterlights' Home Assistant timeout was also 3.0 s, so a
-    bulb that stopped answering blocked its loop for exactly as long as this
-    waits before calling the publisher dead. Result: the entire case blanked for
-    three seconds on every bulb timeout -- two blackouts in three minutes,
-    measured, each exactly 3.0 s and each aligned with a ReadTimeout upstream.
+    matterlights' Home Assistant timeout is 3.0 s, so a bulb that stops
+    answering blocks its loop for that long; a staleness window of 3.0 s would
+    blank the entire case on every bulb timeout.
 
     A publisher stalled on a slow network call is not a dead publisher.
     """

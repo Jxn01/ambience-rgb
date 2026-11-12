@@ -5,7 +5,7 @@ every sink, repeat. All the judgement lives upstream in matterlights, which has
 already decided whether the screen is dark and whether the lights are meant to
 be on. Mirroring the bulbs means obeying those verdicts, not re-deriving them.
 
-⚠️ **Black is a thing you keep writing, not a thing you write once.** None of
+**Black is a thing you keep writing, not a thing you write once.** None of
 this hardware has an off state. The Commander Core reverts to its firmware
 pattern about ten seconds after the last commit, and the ASRock headers fall
 back to the board's own green. So the loop writes on every tick whether the
@@ -49,13 +49,10 @@ RECEIVE_TIMEOUT_SECONDS = 0.5
 # With no frame for this long, matterlights is stopped or wedged. Go dark rather
 # than hold the last colour forever -- a frozen frame looks like working sync.
 #
-# 🚨 **This must exceed the publisher's worst BLOCKING call, not just its tick.**
-# It was 3.0, and matterlights' Home Assistant timeout is also 3.0: a single bulb
-# that stopped answering blocked its loop for exactly as long as this waits
-# before declaring the publisher dead. The whole case blanked for three seconds
-# every time a flaky bulb timed out -- measured at 05:15 on 2026-09-10, two
-# blackouts in three minutes, each precisely 3.0 s and each aligned with a
-# `ReadTimeout` in the publisher's log.
+# **This must exceed the publisher's worst BLOCKING call, not just its tick.**
+# matterlights' Home Assistant timeout is 3.0 s: a single bulb that stops
+# answering blocks its loop for that long, so a staleness window of 3.0 would
+# blank the whole case every time a flaky bulb timed out.
 #
 # A publisher stalled on a slow network call is not a dead publisher. 10 s clears
 # three sequential Home Assistant timeouts and still notices a genuinely stopped
@@ -101,11 +98,11 @@ STOP_POLL_SECONDS = 0.05
 def _colour(value) -> tuple[int, int, int] | None:
     """A payload field as an RGB triple, or None if it is not one.
 
-    Checking the LENGTH alone is not enough, and the earlier version did exactly
-    that: ``tuple("red")[:3]`` is ``('r', 'e', 'd')``, which is three items and
-    passes. Those characters then reach the sinks, where packing them raises and
-    degrades the sink for the retry window on every tick -- a malformed frame
-    quietly taking the lights down instead of being ignored.
+    Checking the LENGTH alone is not enough: ``tuple("red")[:3]`` is
+    ``('r', 'e', 'd')``, which is three items and passes. Those characters would
+    reach the sinks, where packing them raises and degrades the sink for the
+    retry window on every tick -- a malformed frame taking the lights down
+    instead of being ignored.
     """
 
     if not isinstance(value, (list, tuple)) or len(value) != 3:
@@ -180,18 +177,15 @@ class Daemon:
     def _receive(self) -> dict | None:
         """The NEWEST frame waiting, with every command on the way acted on.
 
-        🚨 **Never one datagram per tick.** A frame is absolute state, worthless
-        the moment a newer one exists -- yet this used to take exactly one per
-        tick, the OLDEST waiting, and write the hardware before taking the next.
-        Whenever a tick outlasted the publisher's frame interval, frames piled up
-        in the socket and were played back in order. On Windows, whose UDP
-        receive buffer holds 64 KB -- some 180 frames -- the case ran minutes
-        behind the screen (2026-09-11), and a stop command sent into that socket
-        had still not been honoured eight minutes later: queued behind the
-        frames, or dropped from a full buffer, and either way the shutdown task
-        could not have stopped the daemon. A unix datagram socket caps its queue
-        at about ten and the sender drops the rest, which is why Linux never
-        showed it.
+        **Never one datagram per tick.** A frame is absolute state, worthless
+        the moment a newer one exists. Taking the OLDEST waiting one per tick
+        and writing the hardware before taking the next lets frames pile up in
+        the socket whenever a tick outlasts the publisher's frame interval, to be
+        played back in order. On Windows, whose UDP receive buffer holds 64 KB --
+        some 180 frames -- the case would run minutes behind the screen, and a
+        stop command would sit behind the frames or be dropped from a full
+        buffer. A unix datagram socket caps its queue at about ten and the
+        sender drops the rest, so Linux does not show it.
 
         So: wait up to the receive timeout for the first datagram, then take
         everything already queued without waiting, keeping only the newest
@@ -330,7 +324,7 @@ class Daemon:
         try:
             self._socket = transport.bind(endpoint, timeout=RECEIVE_TIMEOUT_SECONDS)
         except transport.TransportError as error:
-            # 🚨 Refused BEFORE any sink exists, deliberately. The exit path
+            # Refused BEFORE any sink exists, deliberately. The exit path
             # below blacks every sink, so a second daemon that got as far as
             # building them would blank the case under the first one's colours.
             self._logger.error("%s", error)

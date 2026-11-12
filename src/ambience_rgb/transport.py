@@ -12,10 +12,9 @@ The surface is deliberately small. The daemon binds, receives and releases;
 ``devices``, the hardware check and ``off --stop-daemon`` ask whether a daemon
 is listening, and the last of them sends it one datagram.
 
-⚠️ ``socket.AF_UNIX`` is only ever looked up at call time, through
+``socket.AF_UNIX`` is only ever looked up at call time, through
 :func:`_unix_family`. On Windows the attribute does not exist, and a reference
-evaluated at import would be a crash on the first import -- the same shape as
-the ``AttributeError`` that matterlights' publisher once carried.
+evaluated at import would crash on the first import.
 """
 
 from __future__ import annotations
@@ -165,10 +164,10 @@ def _bind_unix(endpoint: UnixEndpoint, socket_factory) -> socket.socket:
         if not _address_in_use(error):
             sock.close()
             raise TransportError(f"Cannot listen on {path}: {error}") from error
-        # 🚨 Something is already at the path: a live daemon's socket, or the
+        # Something is already at the path: a live daemon's socket, or the
         # file a crashed one left behind. Only connecting tells them apart --
-        # and unlinking a LIVE socket is how a second daemon used to take the
-        # path over, leaving the first deaf and the two fighting for hardware.
+        # and unlinking a LIVE socket would let a second daemon take the path
+        # over, leaving the first deaf and the two fighting for hardware.
         if is_listening(endpoint):
             sock.close()
             raise AlreadyRunning(
@@ -207,7 +206,7 @@ def is_listening(endpoint: Endpoint) -> bool:
     accepts no connection, so the test runs the other way: try to bind it, and a
     refusal means someone has it.
 
-    ⚠️ The UDP probe holds the port for the instant between its bind and its
+    The UDP probe holds the port for the instant between its bind and its
     close. A daemon starting in exactly that instant is refused and says so.
     """
 

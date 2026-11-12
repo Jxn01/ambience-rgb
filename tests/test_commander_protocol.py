@@ -7,7 +7,7 @@ these assertions are the only check that exists.
 
 Expected values are taken from the two reference implementations (liquidctl's
 Python framing and OpenRGB's CorsairCommanderCoreController) and from the real
-device's own reported topology on this rig: pump 29, ports 1-3 with 8 each,
+device's own reported topology: pump 29, ports 1-3 with 8 each,
 ports 4-6 empty.
 """
 
@@ -82,7 +82,7 @@ class EndpointWriteTest(unittest.TestCase):
     def test_full_colour_buffer_chunking(self) -> None:
         """699 bytes across 64-byte reports: 55 in the first write, then 61 each.
 
-        🚨 The packet COUNT depends on REPORT_LENGTH, and getting that wrong is
+        The packet COUNT depends on REPORT_LENGTH, and getting that wrong is
         invisible from the transport: the command header survives truncation, so
         every packet is still acknowledged while the colour data is cut off and
         the LEDs stay dark. This device's reports are 64 bytes -- see the note on
@@ -147,7 +147,7 @@ class ColourBufferTest(unittest.TestCase):
         self.assertEqual(buf[base + 204 : base + 207], bytes(RED), "port 3 at 291")
 
     def test_unused_slots_in_a_port_stay_black(self) -> None:
-        """The rig's fans have 8 LEDs in a 34-slot region; 9..34 must be black."""
+        """Fans have 8 LEDs in a 34-slot region; 9..34 must be black."""
 
         buf = colour_buffer([], [[RED] * 8, [], [], [], [], []])
         base = PUMP_LEDS * 3

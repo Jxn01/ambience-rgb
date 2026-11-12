@@ -42,13 +42,12 @@ fi
     sudo pacman -S --needed python-hidapi
 (Debian/Ubuntu: python3-hid)"
 
-# ⚠️ Present is not the same as KEPT. On the author's rig python-hidapi arrived as
-# a dependency of liquidctl, so pacman considered it liquidctl's: removing
+# Present is not the same as KEPT. python-hidapi can arrive as a
+# dependency of liquidctl, so pacman considered it liquidctl's: removing
 # liquidctl -- or any orphan sweep -- would have uninstalled the binding this
 # daemon imports, and the Commander Core would have died on its next open. So it
-# is pinned. (The USB Katana driver's pyserial and cryptography were pinned the
-# same way until that driver was removed on 2026-10-07; nothing here needs them
-# now, and their pins are left as they are rather than undone.)
+# is pinned. (Pins left by the removed USB Katana driver, for pyserial and
+# cryptography, are not undone; nothing needs them now.)
 # `pacman -Qdq` is used rather than parsing `-Qi`, whose labels are localised.
 if command -v pacman >/dev/null; then
     for package in python-hidapi; do

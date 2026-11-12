@@ -2,8 +2,8 @@
 # The ONE place the Linux venv's location is decided; tests/test_linux_venv.py
 # fails the build when a script or unit reaches for another.
 #
-# 🚨 The Linux venv lives OUTSIDE the checkout, on purpose. The checkout can be
-# shared with Windows -- on the author's machine it is one tree on an NTFS drive
+# The Linux venv lives OUTSIDE the checkout, on purpose. The checkout can be
+# shared with Windows -- e.g. one tree on an NTFS drive
 # that both halves of a dual boot mount, reached by the same path from each --
 # and Windows' venv is `.venv` in the checkout: its scheduled tasks run
 # `.venv\Scripts\pythonw.exe`. A Linux venv in the same place cannot coexist

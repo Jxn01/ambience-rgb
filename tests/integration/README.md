@@ -23,8 +23,7 @@ the one matterlights really sends.
 ## Why these exist
 
 The unit tests are fast, pure and prove the logic. They cannot fail for the
-reason that actually cost this project a day. Each of these was written after a
-bug that no unit test could have caught:
+reasons below, each a bug that no unit test can catch:
 
 | Check | The bug that motivated it |
 |---|---|
@@ -33,23 +32,18 @@ bug that no unit test could have caught:
 | `check_failures.py` | A dead socket reused forever, so recovery took 71 s; and the recovery path blacking the AIO it was rescuing |
 | `check_hardware.py` | A wrong HID report size: every packet acknowledged, every readback healthy, every LED dark |
 
-## 🚨 What a passing run does and does not mean
+## What a passing run does and does not mean
 
 `check_policy.py`, `check_soak.py` and `check_failures.py` all read state back
 from the **OpenRGB server's own model** of a device. That proves a packet
 arrived and was accepted. It does **not** prove a single LED lit.
 
-That distinction is not theoretical. For a full day this project had:
-
-- every command acknowledged by the device,
-- LED counts read back correctly,
-- the zone topology exactly right,
-- colours read back matching what was published, tick for tick,
-
-while the Commander Core sat completely dark — because the HID report size was
-96 bytes where the device's own descriptor declares 64. The four-byte command
-header fits in either, so the acknowledgements were real. Only the colour
-payload, which spans many packets, was being truncated.
+A wrong HID report size shows the difference: with 96 bytes where the device's
+own descriptor declares 64, every command is acknowledged, LED counts read back
+correctly, the zone topology is right and read-back colours match what was
+published, tick for tick -- while the Commander Core stays completely dark. The
+four-byte command header fits in either size, so the acknowledgements are real.
+Only the colour payload, which spans many packets, is truncated.
 
 **Only `check_hardware.py` can fail for that reason**, because it asks a person.
 Run it whenever the transport, the packet framing or the report size changes, and
@@ -57,7 +51,7 @@ before believing any claim that the lights work -- including the first run on
 Windows, where the HID stack underneath is a different one.
 
 It covers both devices this project drives with its own code: the Commander Core,
-then the Katana soundbar -- which, since 2026-10-07, means posting each colour to
+then the Katana soundbar -- which means posting each colour to
 Home Assistant's `sb_katana` integration, the way the daemon does. That phase
 first asks HA whether Screen sync is on (it stops there if not: HA would drop
 every colour), re-posts each colour every second so HA's 10-second hand-over

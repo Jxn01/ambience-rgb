@@ -11,7 +11,7 @@ zone sized 0, and ``RESIZEZONE`` on it kills the server with
 headers at 0. liquidctl reads the topology correctly but its ``set_color`` is
 ``raise NotSupportedByDriver``. Neither can drive the fans, so we do.
 
-⚠️ **Exactly one process may drive this device, and hidraw will not enforce it.**
+**Exactly one process may drive this device, and hidraw will not enforce it.**
 There is no exclusive open: a second driver opens ``/dev/hidraw20`` without error
 and the two processes' commands and replies interleave. Two contenders are
 known. OpenRGB's detector for it must be disabled, or the symptoms are baffling
@@ -62,14 +62,14 @@ INTERFACE_NUMBER = 0
 
 # How long to wait for a reply before calling the exchange failed.
 #
-# 🚨 **This is a latency budget for the whole daemon, not just this device.** The
+# **This is a latency budget for the whole daemon, not just this device.** The
 # loop is single-threaded, so every millisecond spent waiting here is a
 # millisecond the OpenRGB sink does not get -- and a failed exchange spends the
 # whole timeout. At 1000 ms one bad frame stalled the loop for three seconds
 # (three attempts) and made the motherboard miss its colour too.
 #
-# Measured over 2020 exchanges on this rig: p50 3.0 ms, p99 3.0 ms, max 49 ms.
-# 250 ms is five times the worst reply ever observed and still fails fast enough
+# Measured over 2020 exchanges: p50 3.0 ms, p99 3.0 ms, max 49 ms.
+# 250 ms is five times the worst reply observed and still fails fast enough
 # that a hiccup costs a frame rather than a visible stall.
 _READ_TIMEOUT_MS = 250
 
@@ -81,8 +81,8 @@ class CommanderCoreError(RuntimeError):
     """The controller could not be opened or did not answer as expected."""
 
 
-# The control interface, as its own report descriptor names it. Read off this
-# rig: `06 42 ff 09 01` on interface 0, `06 42 ff 09 02` on the dead interface 1.
+# The control interface, as its own report descriptor names it. Read off the
+# device: `06 42 ff 09 01` on interface 0, `06 42 ff 09 02` on the dead interface 1.
 CONTROL_USAGE_PAGE = 0xFF42
 CONTROL_USAGE = 0x0001
 
@@ -119,7 +119,7 @@ def find_device_path(entries=None) -> bytes | None:
 def openrgb_has_it(controller_names) -> list[str]:
     """Which of OpenRGB's controllers are this device -- which it must not drive while we do.
 
-    🚨 Two drivers on one HID device is silent: zones read as size 0, colours
+    Two drivers on one HID device is silent: zones read as size 0, colours
     never apply, and no error appears anywhere. The installers turn OpenRGB's
     detectors for it off BY NAME, and another OpenRGB version could use another
     name -- so the sink and ``devices`` check what OpenRGB actually lists.
@@ -141,7 +141,7 @@ class CommanderCore:
 
     Use as a context manager. Leaving the block writes black and releases the
     handle: the controller has no off state, and simply closing the handle
-    returns it to its firmware pattern (green fans on this rig).
+    returns it to its firmware pattern (green fans).
     """
 
     def __init__(
@@ -181,11 +181,10 @@ class CommanderCore:
 
         # The controller answers reads with a zeroed data type until it is
         # woken -- and for a short while after ANOTHER process has released it,
-        # a wake is not immediately enough either. That second case is not
-        # hypothetical: it is exactly what the shutdown unit hits, opening the
-        # device moments after the daemon has closed it, and it presented as
-        # "returned data type (0, 0)" which reads like a protocol mismatch
-        # rather than a timing one. Retry rather than fail the whole shutdown.
+        # a wake is not immediately enough either. The shutdown unit hits exactly
+        # that, opening the device moments after the daemon has closed it; the
+        # symptom is "returned data type (0, 0)", which looks like a protocol
+        # mismatch but is timing. Retry rather than fail the whole shutdown.
         #
         # Read the topology BEFORE forcing fan mode: afterwards the controller
         # can report the 34 slots it exposes rather than the LEDs that exist.
@@ -202,13 +201,12 @@ class CommanderCore:
     def release(self) -> None:
         """Drop the handle WITHOUT writing anything.
 
-        🚨 **Not the same as close(), and confusing the two turns the AIO off.**
+        **Not the same as close(), and confusing the two turns the AIO off.**
         close() blacks the device first, which is right for a clean shutdown and
         badly wrong when the reason we are letting go is that an operation just
         failed: the recovery path then explicitly darkens the hardware it is
         trying to rescue. With this controller's ``0xF0`` bursts arriving every
-        25 seconds or so, that meant the AIO spent its life being blacked and
-        reopened, and read as "the Commander never lights up".
+        25 seconds or so, the AIO would be blacked and reopened over and over.
         """
 
         if self._device is None:
@@ -221,11 +219,10 @@ class CommanderCore:
     def close(self) -> None:
         """Release the device, blacking it first unless this is a read-only open.
 
-        ⚠️ A read-only open must not black on the way out. ``ambience-rgb devices``
-        is a diagnostic, and a diagnostic that turns the AIO off -- and forces
-        fan mode on the way in -- is worse than useless when the daemon is
-        driving it: it fights the daemon over the one handle this device allows
-        and the failure looks like a protocol fault.
+        A read-only open must not black on the way out. ``ambience-rgb devices``
+        is a diagnostic, and one that turns the AIO off -- and forces fan mode on
+        the way in -- would fight the daemon over the one handle this device
+        allows, which looks like a protocol fault.
         """
 
         if self._device is None:
@@ -251,7 +248,7 @@ class CommanderCore:
     def _adopt(self, device) -> None:
         """Attach an open handle in the mode every exchange assumes: non-blocking.
 
-        🚨 **On a non-blocking handle a read without a timeout returns at once,
+        **On a non-blocking handle a read without a timeout returns at once,
         and a read that names one still waits for it.** The drain needs the
         first and the reply read the second. This is the one place the mode is
         set -- open() and the tests both come through here -- so both hold by
@@ -264,26 +261,23 @@ class CommanderCore:
     def _drain(self) -> None:
         """Discard any reply still queued from an earlier exchange.
 
-        ⚠️ **Load-bearing.** Without this the controller's replies drift one
+        **Load-bearing.** Without this the controller's replies drift one
         behind under sustained writing, and the acknowledgement check starts
-        rejecting perfectly good packets -- observed as
-        ``Reply 0x18 does not acknowledge 0x07 during endpoint write`` after a
-        few seconds of colour streaming. liquidctl calls its own
+        rejecting perfectly good packets (``Reply 0x18 does not acknowledge 0x07
+        during endpoint write``) after a few seconds of colour streaming. liquidctl calls its own
         ``clear_enqueued_reports`` before every single command for exactly this
         reason; a colour frame is ten packets, so the queue builds fast.
         """
 
         assert self._device is not None
-        # 🚨 No timeout, on the non-blocking handle _adopt set up: the drain
-        # must never WAIT, only look. Both ways of getting that wrong shipped:
+        # No timeout, on the non-blocking handle _adopt set up: the drain
+        # must never WAIT, only look:
         # - read(N) -- cython-hidapi's read(N, 0) -- on a BLOCKING handle never
-        #   returns at all. It hung the daemon on the first empty queue.
-        # - read(N, 1) returns in 1 ms on Linux, but took 15.5 ms on Windows
-        #   (measured 2026-09-11), before each of the ~14 exchanges in a colour
-        #   frame: 218 ms a frame, 97% of it waiting. That held the daemon to
-        #   4.4 ticks a second, under matterlights' 5, and the frames it could
-        #   not keep up with queued in its socket, minutes deep.
-        # Non-blocking read(N) returned in 0.00 ms. Bounded as well, so a
+        #   returns at all.
+        # - read(N, 1) returns in 1 ms on Linux, but took 15.5 ms on Windows,
+        #   before each of the ~14 exchanges in a colour frame: 218 ms a frame,
+        #   97% of it waiting, which caps the daemon at about 4.4 ticks a second.
+        # Non-blocking read(N) returns in 0.00 ms. Bounded as well, so a
         # device that keeps talking cannot trap the loop either.
         for _ in range(_MAX_DRAIN_READS):
             if not self._device.read(REPORT_LENGTH):
@@ -303,13 +297,12 @@ class CommanderCore:
         self._device.write(packet)
         reply = self._device.read(REPORT_LENGTH, _READ_TIMEOUT_MS)
         while reply and reply[0] != 0x00:
-            # ⚠️ Not garbage: this controller emits an unsolicited report whose
+            # Not garbage: this controller emits an unsolicited report whose
             # first byte is 0xF0, in bursts lasting a few seconds, every half a
             # minute or so under sustained streaming. It is not an answer to
-            # anything we sent, and while it is happening the acknowledgement we
-            # are waiting for never arrives -- so this loop discards it and the
-            # exchange then fails on the timeout, which is correct. It is
-            # recorded here because "no reply to command 0x07" gives no hint
+            # anything we sent, and while it lasts the acknowledgement we are
+            # waiting for never arrives -- so this loop discards it and the
+            # exchange then fails on the timeout. The debug line below records
             # that a report WAS received and thrown away.
             self._logger.debug("Discarding unsolicited report %s", bytes(reply[:4]).hex())
             reply = self._device.read(REPORT_LENGTH, _READ_TIMEOUT_MS)
@@ -323,14 +316,12 @@ class CommanderCore:
     def _mismatch(self, got: int, expect: int) -> str:
         """Describe an acknowledgement mismatch, naming the one cause we can recognise.
 
-        🚨 **A reply to a WAKE/SLEEP we did not send is another process's reply.**
+        **A reply to a WAKE/SLEEP we did not send is another process's reply.**
         Every other driver for this controller talks to it that way: liquidctl
         brackets *every* operation with WAKE and SLEEP, and OpenRGB wakes it on
         start. hidraw delivers each input report to every reader, so their
-        answers land in our queue. On 2026-09-10 CoolerControl's liquidctl
-        integration did exactly that, and the only log line was ``Reply 0x01 does
-        not acknowledge command 0x0d`` -- fifty-seven times, naming neither the
-        cause nor the check.
+        answers land in our queue; without this check the only log line would be
+        ``Reply 0x01 does not acknowledge command 0x0d``, naming no cause.
 
         Deliberately narrow: any other mismatch keeps the plain message, because
         blaming a stranger for every bad byte would teach the reader to ignore
@@ -375,13 +366,10 @@ class CommanderCore:
         reverts to its firmware pattern about ten seconds after the last commit,
         that is long enough for the fans to visibly flash.
 
-        ⚠️ **This no longer fires, and the reason is worth keeping.** It was
-        written when the controller was dropping acknowledgements every 25-50 s
-        under load -- which was not device behaviour at all, but its reaction to
-        being sent 97-byte reports when its descriptor declares 64. A 300-second
-        streaming run since measured **1312 endpoint writes and 0 retries**. It
-        is kept because it is correct on its own terms and costs nothing when it
-        never triggers; it is not load-bearing.
+        Normally this never fires: dropped acknowledgements under load came from
+        sending 97-byte reports when the descriptor declares 64, not from the
+        device. A 300-second streaming run measured 1312 endpoint writes and 0
+        retries. It is kept as a cheap safety net.
 
         The retry restarts the whole endpoint write rather than resending the
         packet that failed, because the sequence is a transaction: open, write

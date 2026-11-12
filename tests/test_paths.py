@@ -1,11 +1,11 @@
 """Where this program keeps its config and its log, on each platform.
 
-⚠️ **Nothing in ``paths`` may raise.** The log path is decided before logging
+**Nothing in ``paths`` may raise.** The log path is decided before logging
 exists, and the shutdown task on Windows runs as SYSTEM with an environment
 nothing like a login shell's. ``Path.home()`` cannot fail on Linux -- it falls
 back to the password database -- but on Windows it is purely environmental and
-raises ``RuntimeError`` when ``USERPROFILE`` is missing. That asymmetry already
-shipped a startup crash in matterlights, so every branch here is exercised,
+raises ``RuntimeError`` when ``USERPROFILE`` is missing. That asymmetry is a latent
+startup crash, so every branch here is exercised,
 including the degenerate one.
 """
 

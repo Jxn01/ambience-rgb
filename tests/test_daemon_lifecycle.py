@@ -4,7 +4,7 @@ These run the real daemon loop against a real socket -- UDP on the loopback, so
 they run on Windows as well -- with fake sinks standing in for the hardware.
 They pin down the parts the Windows port leans on hardest:
 
-* 🚨 **A second daemon refuses to start without touching the hardware.** Its
+* **A second daemon refuses to start without touching the hardware.** Its
   exit path blacks every sink, so a refusal that got as far as building sinks
   would blank the case underneath the first daemon's colours.
 * **A stop command is a clean exit, code 0,** with black written and the
@@ -143,17 +143,15 @@ class _Running:
 
 
 class BacklogTest(unittest.TestCase):
-    """🚨 Only the newest frame matters: the daemon must never replay a queue.
+    """Only the newest frame matters: the daemon must never replay a queue.
 
-    Measured on the Windows half, 2026-09-11: the case ran minutes behind the
-    screen while the bulbs, fed by the same publisher, kept up. Each tick read
-    ONE datagram -- the oldest waiting -- and then spent longer writing the
-    hardware than matterlights takes between frames, so frames piled up in the
-    socket's receive buffer (64 KB on Windows, some 180 frames) and were played
-    back in order. A stop command sent into it at 02:05:13 had still not been
-    honoured eight minutes later -- queued behind the frames or dropped from a
-    full buffer. A unix datagram socket caps its queue at about ten and the
-    sender drops the rest, which is why Linux never showed it.
+    If each tick read ONE datagram -- the oldest waiting -- and then spent longer
+    writing the hardware than the publisher takes between frames, frames would
+    pile up in the socket's receive buffer (64 KB on Windows, some 180 frames)
+    and be played back in order, so the case runs minutes behind the screen and
+    a stop command is queued behind the frames or dropped from a full buffer. A
+    unix datagram socket caps its queue at about ten and the sender drops the
+    rest, so Linux does not show it.
     """
 
     def setUp(self) -> None:
@@ -289,7 +287,7 @@ class LifecycleTest(unittest.TestCase):
         self.assertIs(hooks[0].finished, running.daemon.finished)
 
     def test_a_second_daemon_refuses_without_touching_the_hardware(self) -> None:
-        """🚨 Its exit path blacks every sink -- underneath the first daemon's colours."""
+        """Its exit path blacks every sink -- underneath the first daemon's colours."""
 
         holder = transport.bind(self.endpoint)
         self.addCleanup(transport.release, self.endpoint, holder)
@@ -353,12 +351,12 @@ class LightsOffTest(unittest.TestCase):
         self.config = _udp_config()
 
     def test_stop_daemon_releases_the_hardware_before_blacking_it_again(self) -> None:
-        """🚨 Windows opens the soundbar's COM port EXCLUSIVELY.
+        """Windows opens the soundbar's COM port EXCLUSIVELY.
 
-        The shutdown task used to be able to run only beside a live daemon: its
-        own open of COM3 would fail, and even where it succeeded the daemon's
-        next tick repainted over its black. So it stops the daemon first and
-        opens nothing until the daemon has closed everything.
+        A shutdown task running beside a live daemon would fail to open the COM
+        port, and even where it succeeded the daemon's next tick would repaint
+        over its black. So it stops the daemon first and opens nothing until the
+        daemon has closed everything.
         """
 
         journal: list[str] = []

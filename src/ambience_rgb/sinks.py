@@ -7,7 +7,7 @@ syncing, and losing the OpenRGB server must not stop the AIO.
 
 That is not defensive habit, it is the actual failure mode: the OpenRGB server
 is a separate process that can be restarted or crash on its own (a RESIZEZONE on
-this rig's Commander Core kills 1.0rc3 outright), the AIO is a USB device that
+the Commander Core kills 1.0rc3 outright), the AIO is a USB device that
 can be unplugged, and Home Assistant -- which drives the soundbar -- is another
 machine that can be rebooted or unreachable.
 """
@@ -40,7 +40,7 @@ RGB = tuple[int, int, int]
 # dead server, short enough that a restarted one is picked up without help.
 RETRY_SECONDS = 10.0
 
-# ⚠️ The Commander Core needs a much shorter one. It reverts to its firmware
+# The Commander Core needs a much shorter one. It reverts to its firmware
 # pattern about ten seconds after the last commit, so a ten-second backoff is
 # almost exactly long enough to guarantee the fans flash green on any hiccup.
 # Its backoff must stay comfortably under that revert time.
@@ -65,13 +65,8 @@ HEALTH_TIMEOUT_SECONDS = 5.0
 
 # Consecutive unanswered probes before the connection is dropped.
 #
-# This was 6, tuned when the server appeared to go quiet for tens of seconds at a
-# time under load. That turned out not to be the server: the daemon's own loop
-# was being stalled by a 1000 ms HID read timeout, and the per-zone write path
-# was stalling OpenRGB's ASRock controller. With both fixed, a 300-second
-# streaming run measured **60 health checks and 0 misses**, so 6 was simply
-# slow to notice a real wedge -- half a minute of stale colour before acting.
-#
+# A 300-second streaming run measured 60 health checks and 0 misses, so a high
+# count (6) only delays noticing a real wedge -- half a minute of stale colour.
 # 3 tolerates a genuine hiccup and still reports a wedged server in ~15 s.
 HEALTH_FAILURES_BEFORE_RECONNECT = 3
 
@@ -83,7 +78,7 @@ WEDGE_RECONNECTS = 3
 WEDGE_WINDOW_SECONDS = 120.0
 
 # Never restart the server more often than this, whatever happens. A restart
-# loop would be worse than a frozen rig: it also resets every device, including
+# loop would be worse than a frozen case: it also resets every device, including
 # ones held at a static colour.
 RESTART_COOLDOWN_SECONDS = 300.0
 
@@ -96,16 +91,15 @@ CREATE_NO_WINDOW = 0x08000000
 def released_on_failure(sink) -> Iterator[None]:
     """Drop the sink's live handle if the operation inside fails.
 
-    🚨 **Both sinks had this bug, so it lives here rather than in either of
-    them.** ``ResilientSink`` catches a failure and retries on a timer, but it
+    Shared by both sinks rather than repeated in each. ``ResilientSink`` catches a failure and retries on a timer, but it
     cannot reach inside to invalidate the handle -- so a socket or HID handle
     that has died gets reused for every retry and fails identically forever.
 
-    Measured on the OpenRGB side: after the server was restarted underneath a
-    running daemon, the only path that ever reconnected was the health check,
-    six timeouts later. Recovery took 71 s; dropping the handle here took it to
-    11 s. The Commander Core sink had the same shape and no equivalent rescue at
-    all -- an unplugged AIO would never have been reopened.
+    For OpenRGB, after the server is restarted underneath a running daemon, the
+    only other path that reconnects is the health check, six timeouts later:
+    recovery took 71 s, against 11 s when the handle is dropped here. The
+    Commander Core sink has no equivalent rescue -- an unplugged AIO would never
+    be reopened.
 
     Any exception counts. A handle whose last operation failed is suspect
     whatever the reason, and reopening one is cheap.
@@ -128,7 +122,7 @@ def _moved(before: tuple[RGB, ...], after: tuple[RGB, ...]) -> bool:
     means one thing everywhere.
 
     A different COUNT of colours is a move too. zip() alone stops at the shorter
-    signature, so a colour joining the palette used to be no change at all.
+    signature, so a colour joining the palette would otherwise count as no change.
     """
 
     if len(before) != len(after):
@@ -192,10 +186,10 @@ class ResilientSink:
     def black(self) -> bool:
         """Always attempted, backoff or not: black is what every exit path writes.
 
-        🚨 SIGTERM can land mid-write -- hidapi reports the interrupted poll() as
+        SIGTERM can land mid-write -- hidapi reports the interrupted poll() as
         "read error" -- and that failure marks the sink degraded a fraction of a
         millisecond before the shutdown blacks it. With the backoff applied here
-        the shutdown's black was skipped without a word, and the AIO was left to
+        the shutdown's black would be skipped without a word and the AIO would
         drift back to its firmware rainbow. The backoff is for ticks, which come
         again; an exit path does not.
         """
@@ -235,7 +229,7 @@ class OpenRGBSink:
         # means the device set moved under us -- see _check_health.
         self._planned_controllers = 0
         self._reconnects: list[float] = []
-        # ⚠️ None, not 0.0. time.monotonic() is boot-relative, so a 0.0 sentinel
+        # None, not 0.0. time.monotonic() is boot-relative, so a 0.0 sentinel
         # makes the cooldown swallow the FIRST restart for the first five
         # minutes of uptime -- exactly when a wedge at startup would matter.
         self._restarted_at: float | None = None
@@ -270,9 +264,9 @@ class OpenRGBSink:
         for device_index in sorted({target[0] for target in self._targets}):
             # Devices sitting in a firmware effect ignore colour writes until the
             # DEVICE is put into direct mode -- not merely the server's model of
-            # it. The GPU ships on Rainbow and the ASRock board on Off, so this
-            # is not theoretical: with only SETCUSTOMMODE the GPU cycled its
-            # rainbow for hours while every readback claimed it was in Direct.
+            # it. The GPU ships on Rainbow and the ASRock board on Off: with only
+            # SETCUSTOMMODE the GPU keeps cycling its rainbow while every
+            # readback claims it is in Direct.
             client.set_direct_mode(device_index)
         self._apply_static(client)
 
@@ -282,9 +276,7 @@ class OpenRGBSink:
         Deliberately here rather than in the tick loop, and deliberately repeated
         on every reconnect: OpenRGB's Direct mode does not persist, so restarting
         the server leaves these devices dark and an ``excluded`` rule means
-        nothing ever puts them back. On this rig that silently cost the keyboard
-        its white every time the server was restarted, including by our own
-        recovery path.
+        nothing ever puts them back -- including after our own recovery restart.
         """
 
         for controller in client.controllers:
@@ -304,13 +296,13 @@ class OpenRGBSink:
         covering the device's LEDs in order, so a split controller is still one
         packet. For the per-zone fallback it is ``((zone_index, group, count),)``.
 
-        🚨 **Prefer one whole-device write to several per-zone writes.** Zones are
+        **Prefer one whole-device write to several per-zone writes.** Zones are
         contiguous ranges of the same LED array, so writing the array once says
-        exactly the same thing in one packet instead of six -- and on this rig the
-        per-zone path through OpenRGB's ASRock controller **stalls the server**.
-        Measured: whole-device writes ran 15/15 frames clean where zone writes
-        stalled within one or two, after which the server stopped applying
-        anything on that connection and the case froze on an old colour.
+        exactly the same thing in one packet instead of six -- and the per-zone
+        path through OpenRGB's ASRock controller **stalls the server**.
+        Whole-device writes ran 15/15 frames clean where zone writes stalled
+        within one or two, after which the server stopped applying anything on
+        that connection and the case froze on an old colour.
 
         The exception is a device with an *excluded* zone. A whole-device write
         must supply a colour for every LED, so it cannot leave one zone alone;
@@ -438,7 +430,7 @@ class OpenRGBSink:
         self._health_failures = 0
         announced = getattr(self._client, "device_list_dirty", False)
         if announced or controllers != self._planned_controllers:
-            # 🚨 Not a wedge -- deliberately NOT counted by _note_reconnect, which
+            # Not a wedge -- deliberately NOT counted by _note_reconnect, which
             # exists to escalate a server that keeps going unresponsive. This is a
             # healthy server whose device list moved, and one clean reconnect is
             # the whole fix. Counting it here would restart OpenRGB three device
@@ -497,7 +489,7 @@ class OpenRGBSink:
         import subprocess
         import sys
 
-        # 🚨 Under pythonw there is no console, so a console program started from
+        # Under pythonw there is no console, so a console program started from
         # here -- PowerShell, on Windows -- gets a window of its own, flashing up
         # on the desktop at every restart. POSIX rejects the flag: Windows only.
         extra = {"creationflags": CREATE_NO_WINDOW} if sys.platform == "win32" else {}
@@ -509,15 +501,14 @@ class OpenRGBSink:
     def _should_send(self, key: tuple, colours: tuple[RGB, RGB], now: float) -> bool:
         """Whether this target needs the packet, or already shows these colours.
 
-        🚨 **The write side of this protocol is fire-and-forget, so overrunning
+        **The write side of this protocol is fire-and-forget, so overrunning
         the server is invisible from here.** Every ``sendall`` returns in
         microseconds whatever the server is doing with the bytes; the OpenRGB
         server then applies them one at a time against real USB and SMBus
         devices, which is far slower. Writing all eleven targets every tick
         offered it ~43 packets a second, it drained them at a fraction of that,
         and the backlog grew without bound -- so the board displayed a colour
-        from minutes ago. Across a display-off period it displayed black long
-        after the screen came back, which reads exactly like "the RGB is dead".
+        from minutes ago, even black long after the screen came back.
 
         Sending only what changed makes a static screen almost free while a
         changing one still streams, and the refresh keeps a re-detected

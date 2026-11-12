@@ -7,8 +7,8 @@ that is tens of thousands of database rows an hour. The endpoint records nothing
 ``GET`` on the same path answers the stream's status, for ``ambience-rgb devices``.
 
 The token is read from ``$AMBIENCE_RGB_HA_TOKEN``, or ``token_file`` in the config,
-or else ``.ha-token`` at the root of this checkout -- gitignored, and on the drive
-both operating systems share, so one file serves both halves of the rig.
+or else ``.ha-token`` at the root of this checkout -- gitignored, so one file serves
+both operating systems when the checkout is shared.
 """
 
 from __future__ import annotations

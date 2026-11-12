@@ -77,13 +77,13 @@ class ShutdownUnitTest(unittest.TestCase):
         self.assertIn("RequiresMountsFor=", read("ambience-rgb-lights-off.service"))
 
     def test_it_reads_the_config_the_daemon_reads(self) -> None:
-        """🚨 It used to read the repo's example config, whatever the daemon used.
+        """It must not fall back to the repo's example config.
 
         Root at shutdown has neither this user's home nor their environment, so
         it cannot search for their config. With a config of their own, the
         shutdown pass would black the example's set of devices instead of theirs.
-        The installer resolves the daemon's file and hands it over -- the same
-        fix the Windows shutdown task needed, for the same reason.
+        The installer resolves the daemon's file and hands it over, as it does
+        for the Windows shutdown task.
         """
 
         text = read("ambience-rgb-lights-off.service")
@@ -112,7 +112,7 @@ class InstallerTest(unittest.TestCase):
                 self.assertIn(f"s|{placeholder}|", installer)
 
     def test_our_openrgb_is_stopped_before_its_settings_are_edited(self) -> None:
-        """🚨 OpenRGB reads ``OpenRGB.json`` once, while it detects devices, and
+        """OpenRGB reads ``OpenRGB.json`` once, while it detects devices, and
         writes the whole file back from memory whenever it saves a setting --
         and ``enable --now`` does not restart a unit that is already running.
         So the installer stops ours before the edit, and ``enable --now``
@@ -129,13 +129,13 @@ class InstallerTest(unittest.TestCase):
         self.assertLess(edit, start)
 
     def test_a_rerun_restarts_the_daemon_on_the_pulled_code_and_config(self) -> None:
-        """🚨 ``enable --now`` starts a stopped unit and leaves a running one alone.
+        """``enable --now`` starts a stopped unit and leaves a running one alone.
 
-        So a re-run after a pull left the daemon on its old code and its old
-        config -- it reads the config once, at start -- while the settings edit
-        above had just changed OpenRGB under it. With the red/green pin, that is
-        green for red on every header, produced by following the instructions.
-        ``install.ps1`` restarts its daemon task; this holds Linux to the same.
+        So a re-run after a pull would leave the daemon on its old code and its
+        old config -- it reads the config once, at start -- while the settings
+        edit above had just changed OpenRGB under it. With the red/green pin,
+        that is green for red on every header. ``install.ps1`` restarts its
+        daemon task; this holds Linux to the same.
         """
 
         installer = (UNITS.parent / "scripts" / "install.sh").read_text(encoding="utf-8")

@@ -8,9 +8,9 @@ renders every task with a real pwsh and parses what came out. The XML that is
 registered on Windows is the XML tested here.
 
 Set ``AMBIENCE_RGB_PWSH`` to a pwsh binary to run those tests where none is on
-PATH. On the Windows half ``pwsh`` is on PATH already.
+PATH. On Windows ``pwsh`` is normally on PATH already.
 
-⚠️ **What this cannot tell you:** that Task Scheduler accepts the registration,
+**What this cannot tell you:** that Task Scheduler accepts the registration,
 that the triggers fire, or that OpenRGB's Windows build takes these flags. That
 needs Windows, and is on the verification list in the README.
 """
@@ -56,11 +56,11 @@ class ScriptSetTest(unittest.TestCase):
 
 
 class PortabilityTest(unittest.TestCase):
-    """🚨 None of the author's paths may be baked in.
+    """No machine-specific path may be baked in.
 
-    On the Windows half the account is ``jxn`` while the profile folder is
-    ``jxnpe`` -- and ``jxnpe`` is not an account Task Scheduler can map. A
-    literal path is a trap for this machine, never mind anyone else's.
+    A Windows profile folder name can differ from the account name, and the
+    folder name is not an account Task Scheduler can map. A literal path is a
+    trap on any machine but the one it was written on.
     """
 
     def test_no_script_hard_codes_a_profile_or_a_home(self) -> None:
@@ -71,7 +71,7 @@ class PortabilityTest(unittest.TestCase):
                     self.assertNotIn(needle, text)
 
     def test_every_script_is_plain_ascii(self) -> None:
-        """🚨 Windows PowerShell 5.1 reads a .ps1 without a byte-order mark as
+        """Windows PowerShell 5.1 reads a .ps1 without a byte-order mark as
         the ANSI code page, not UTF-8. One em dash inside a string becomes
         mojibake there -- or a stray quote the parser then trips over. ASCII
         reads the same in every PowerShell."""
@@ -101,7 +101,7 @@ class InstallerTest(unittest.TestCase):
         self.text = read("install.ps1")
 
     def test_the_venv_does_not_see_system_site_packages(self) -> None:
-        """🚨 The hidapi rule inverts on Windows.
+        """The hidapi rule inverts on Windows.
 
         On Linux the ``hid`` binding is the distribution's and pip must never
         touch it; on Windows it comes from pip (``hidapi``) and nothing else.
@@ -124,7 +124,7 @@ class InstallerTest(unittest.TestCase):
         self.assertNotIn("ConvertTo-Json", code(self.text), "its default depth of 2 flattens OpenRGB.json")
 
     def test_our_openrgb_is_stopped_before_its_settings_are_edited(self) -> None:
-        """🚨 OpenRGB reads ``OpenRGB.json`` once, while it detects devices, and
+        """OpenRGB reads ``OpenRGB.json`` once, while it detects devices, and
         writes the whole file back from memory whenever it saves a setting. An
         edit made while it runs does not apply until it restarts, and can be
         overwritten before then. Step 6 starts the task again; this is the stop.
@@ -141,7 +141,7 @@ class InstallerTest(unittest.TestCase):
     def test_a_rerun_restarts_the_daemon_on_the_pulled_code_and_config(self) -> None:
         """The daemon reads its config once, at start, so a re-run after a pull
         must restart it -- after OpenRGB's settings have been edited. install.sh
-        is held to the same, and for a long time did not do it."""
+        is held to the same."""
 
         text = code(self.text)
         restart = text.find("Restart-AmbienceTask $AmbienceDaemonTask")
@@ -155,7 +155,7 @@ class InstallerTest(unittest.TestCase):
         self.assertIn("WindowsIdentity]::GetCurrent()", self.text)
 
     def test_it_looks_for_software_that_would_fight_for_the_hardware(self) -> None:
-        # Both are set to start automatically on the author's Windows half.
+        # Both are commonly set to start automatically.
         for service in ("CorsairService", "SignalRgb.Service"):
             with self.subTest(service=service):
                 self.assertIn(service, self.text)
@@ -169,13 +169,12 @@ class InstallerTest(unittest.TestCase):
 
 
 class ShutdownTaskElevationTest(unittest.TestCase):
-    """🚨 Unelevated, the SYSTEM shutdown task is invisible, not merely locked.
+    """Unelevated, the SYSTEM shutdown task is invisible, not merely locked.
 
     ``Get-ScheduledTask`` and ``Start-ScheduledTask`` answer "No
     MSFT_ScheduledTask objects found" -- word for word what they say of a task
-    that does not exist; only ``schtasks /query`` says "Access is denied". Seen
-    on the first Windows boot, from an unelevated shell, with the task
-    registered and Ready.
+    that does not exist; only ``schtasks /query`` says "Access is denied". This
+    happens from an unelevated shell, with the task registered and Ready.
     """
 
     START = re.compile(r"Start-ScheduledTask -TaskName (ambience-rgb-lights-off|\$AmbienceShutdownTask)\b")
@@ -283,7 +282,7 @@ class PowerShellTest(unittest.TestCase):
         self.assertEqual(self._text(root, "t:Principals/t:Principal/t:UserId"), SAMPLE_USER)
         self.assertEqual(self._text(root, "t:Principals/t:Principal/t:LogonType"), "InteractiveToken")
         self.assertEqual(self._text(root, "t:Principals/t:Principal/t:RunLevel"), "LeastPrivilege")
-        # 🚨 Task Scheduler stops any task after 72 hours unless told otherwise.
+        # Task Scheduler stops any task after 72 hours unless told otherwise.
         self.assertEqual(self._text(root, "t:Settings/t:ExecutionTimeLimit"), "PT0S")
         self.assertEqual(self._text(root, "t:Settings/t:MultipleInstancesPolicy"), "IgnoreNew")
         self.assertEqual(self._text(root, "t:Settings/t:DisallowStartIfOnBatteries"), "false")

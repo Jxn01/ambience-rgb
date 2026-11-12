@@ -14,8 +14,8 @@ gets neither right on its own:
   ``zone_channel_order`` sends comes out right only if that swap is where the
   config assumes it is.
 
-This used to be an inline Python snippet in ``install.sh``. It is a module now
-so that ``install.ps1`` runs the very same edit -- rather than a PowerShell copy
+It is a module, not an inline snippet, so that ``install.sh`` and
+``install.ps1`` run the very same edit -- rather than a PowerShell copy
 that would drift, and would meet ``ConvertTo-Json``'s default depth of 2, which
 silently flattens anything nested deeper. ``OpenRGB.json`` is deeper.
 """
@@ -39,7 +39,7 @@ from ambience_rgb.openrgb_settings import (
     update_settings,
 )
 
-# What OpenRGB 1.0rc3.1 wrote on its first run on the Windows half, 2026-09-11:
+# What OpenRGB 1.0rc3.1 wrote on its first run on Windows:
 # the board's own table marks PCH, IO Cover and PCB as swapped, and OpenRGB
 # defaults every other zone to off.
 FIRST_RUN_RG_SWAP = {
@@ -52,7 +52,7 @@ FIRST_RUN_RG_SWAP = {
     "RGB LED 1 Header": False,
     "RGB LED 2 Header": False,
 }
-# The zones this rig's config pins.
+# The zones the shipped config pins.
 PINNED = ("IO Cover", "PCB", "Addressable Header 1", "Addressable Header 2", "Addressable Header 3/Audio")
 ASROCK_RULE = """
 [[devices]]
@@ -120,7 +120,7 @@ class DisableTest(unittest.TestCase):
         self.assertEqual(detectors, {name: False for name in COMMANDER_DETECTORS})
 
     def test_no_file_yet_is_created_with_the_detectors_already_off(self) -> None:
-        """🚨 On the Windows half OpenRGB is not even installed yet.
+        """OpenRGB may not be installed yet.
 
         Waiting for its settings file would leave a trap: install OpenRGB after
         ambience-rgb, run it once, and it detects the Commander Core with its
@@ -147,7 +147,7 @@ class DisableTest(unittest.TestCase):
 class RgSwapTest(unittest.TestCase):
     """Forcing OpenRGB's red/green swap on, for the zones the config names.
 
-    🚨 OpenRGB swaps a zone when ``board_table_bit || setting``, so the file can
+    OpenRGB swaps a zone when ``board_table_bit || setting``, so the file can
     force a swap on and never off. On is therefore the only state worth
     pinning, and only for zones a device rule lists in ``openrgb_rg_swap``.
     """
@@ -279,7 +279,7 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(swaps, {zone: True for zone in PINNED})
 
     def test_a_broken_config_still_disables_the_detectors(self) -> None:
-        """🚨 The detector pin must not hang on the config parsing.
+        """The detector pin must not hang on the config parsing.
 
         Without it OpenRGB can take the AIO from the daemon, silently, and a
         typo in an unrelated key would be enough. So the detectors are pinned

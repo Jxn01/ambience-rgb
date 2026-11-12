@@ -1,13 +1,12 @@
 """Ask a human whether the lights actually lit.
 
-🚨 **This is the only check in the repository that can fail for the right
+**This is the only check in the repository that can fail for the right
 reason.** Everything else -- unit tests, the policy harness, every readback --
-inspects software's opinion of the hardware. That opinion was wrong for a full
-day: a mismatched HID report size truncated the Commander Core's colour payload
-while leaving the command header intact, so every packet was acknowledged, LED
-counts read back correctly, the topology looked right, and the device sat dark.
-No amount of automated verification could see it. A person glancing at the case
-saw it instantly.
+inspects software's opinion of the hardware. That opinion can be wrong: a
+mismatched HID report size truncates the Commander Core's colour payload while
+leaving the command header intact, so every packet is acknowledged, LED counts
+read back correctly, the topology looks right, and the device sits dark. No
+automated verification can see that; a person glancing at the case can.
 
 So this drives a deliberate, memorable sequence on each device we drive with our
 own code -- the Commander Core, then the Katana soundbar through Home Assistant

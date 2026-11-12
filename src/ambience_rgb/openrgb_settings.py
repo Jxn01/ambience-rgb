@@ -3,29 +3,28 @@
 Two things in ``OpenRGB.json`` decide whether this program works, and OpenRGB
 gets neither right on its own:
 
-- 🚨 **The Commander Core detectors must be off.** Exactly one process may drive
+- **The Commander Core detectors must be off.** Exactly one process may drive
   a HID device, and neither Linux's hidraw nor Windows' HID stack enforces it: a
   second driver opens the device just as successfully, and the two interleave.
   OpenRGB registers the Commander Core even though it cannot size its zones, so
   with its detector on nothing errors and the colours never apply.
-- 🚨 **The red/green swap must be on for the zones the config names** -- each
+- **The red/green swap must be on for the zones the config names** -- each
   device rule's ``openrgb_rg_swap``. OpenRGB swaps an ASRock Polychrome zone
   when the board's own table OR this setting says so
   (``PolychromeUSBController::SetDeviceInfo``: ``rgswap = table_bit ||
   setting``), so the file can force a swap on and never off -- and the table is
   nothing to lean on, since OpenRGB writes zeros into it on entering Direct
   mode. What ``zone_channel_order`` sends comes out right only while the swap
-  is where the config assumes: on the first Windows boot the addressable
-  headers showed green for red, because the board's table had their swap on
-  and nothing swapped them back.
+  is where the config assumes: if the board's table has a zone's swap on
+  and nothing swaps it back, that zone shows green for red.
 
 OpenRGB reads this file once, as it detects devices, and writes the whole of it
 back from memory whenever it saves a setting. An edit made while it runs does
 not apply until it restarts, and can be overwritten before then -- so both
 installers stop their OpenRGB first and start it again afterwards.
 
-This was an inline Python snippet in ``install.sh``. It is a module so that
-``install.ps1`` runs the very same edit, rather than a PowerShell copy that
+This is a module, not an inline snippet, so that ``install.sh`` and
+``install.ps1`` run the very same edit, rather than a PowerShell copy that
 would drift -- and that would meet ``ConvertTo-Json``'s default depth of 2,
 which silently flattens anything nested deeper. ``OpenRGB.json`` is deeper.
 
@@ -73,8 +72,8 @@ def update_settings(path: Path, *, rg_swaps=(), backup_to: Path | None = None) -
     leaves the file byte-for-byte alone. When a change IS needed and
     ``backup_to`` is given, the original goes there first.
 
-    🚨 **No file yet is not a reason to skip.** On the Windows half OpenRGB was
-    not even installed yet, and waiting would leave a trap: install it after
+    **No file yet is not a reason to skip.** OpenRGB may not be installed yet,
+    and waiting would leave a trap: install it after
     ambience-rgb, run it once, and it detects the Commander Core with its
     detector on -- beside the daemon. So the file is created holding just these
     entries, and OpenRGB starts from them whenever it first runs. A swap section
@@ -159,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     path = Path(args[0])
 
-    # 🚨 The detectors are pinned whatever the config says, or fails to say: a
+    # The detectors are pinned whatever the config says, or fails to say: a
     # typo in an unrelated key must not hand the AIO to OpenRGB.
     status = 0
     try:

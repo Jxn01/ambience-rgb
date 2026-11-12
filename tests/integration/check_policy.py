@@ -1,4 +1,4 @@
-"""Every decision the daemon makes, asserted against a live rig.
+"""Every decision the daemon makes, asserted against live hardware.
 
 Publishes frames exactly as matterlights does -- same publisher class, same
 socket, same payload -- and checks what the devices end up holding. Because the
@@ -97,23 +97,20 @@ def main() -> int:
         publisher.close()
         time.sleep(1.0)
         failures = []
-        # 🚨 Model the WHOLE pipeline, not the last stage of it. The LEDs are
+        # Model the WHOLE pipeline, not the last stage of it. The LEDs are
         # deliberately not sent the published colour: the daemon first pulls the
         # near and far colours toward each other by `group_cohesion` (so the case
         # reads as one lit room rather than two arguing halves), and only then
         # applies saturation and gamma (because a bulb and a strip showing
         # identical numbers do not look alike).
         #
-        # This check modelled `treat` alone for as long as cohesion existed, and
-        # therefore failed 6 of 10 against a daemon that was behaving perfectly.
-        # An integration check that has drifted from the code accuses the rig.
+        # An integration check that has drifted from the code accuses the hardware.
         for index, zone, group, order, colours in _observed(reader, plan):
-            # 🚨 And the LAST stage: some zones are not sent RGB. This board's
+            # And the LAST stage: some zones are not sent RGB. This board's
             # zones are sent GRB, undoing the red/green swap OpenRGB makes on
             # them, so the colours the server holds for them are a permutation
             # of the colour. Comparing against unpermuted values fails on
-            # exactly those zones and looks like a colour bug -- which is
-            # precisely how the original GRB fault presented.
+            # exactly those zones and looks like a colour bug.
             want = (
                 (0, 0, 0)
                 if expect_black
@@ -152,8 +149,8 @@ def main() -> int:
     check("and recovers again after staleness", (0, 255, 255), (255, 255, 0))
 
     # And the one case that needs a palette: a strip must show a gradient, not
-    # one averaged tone. This is the seam that was silently disconnected once --
-    # every layer correct, nothing joining them.
+    # one averaged tone. This is the seam between layers that are each
+    # correct on their own.
     publisher = AmbiencePublisher(str(config.endpoint))
     _publish(
         publisher, (255, 0, 0), (0, 0, 255),

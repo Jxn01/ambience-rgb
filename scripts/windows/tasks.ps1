@@ -183,8 +183,8 @@ function New-AmbienceShutdownTaskXml {
     .DESCRIPTION
         SYSTEM, in session 0, deliberately. By the time event 1074 is logged
         the user's session is already being torn down and Windows will not
-        start a process in it -- matterlights registered its own first as the
-        user and watched it fail with STATUS_DLL_INIT_FAILED_LOGOFF. It is also
+        start a process in it; a task registered as the user fails with
+        STATUS_DLL_INIT_FAILED_LOGOFF. It is also
         why the daemon's in-process session-end hook never fires at shutdown.
 
         It runs "off --stop-daemon": ask the daemon to stop, wait until it has

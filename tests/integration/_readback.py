@@ -5,12 +5,12 @@ LED counts, and each mode's raw bytes. These checks need the rest -- the active
 mode and the current colours -- so the walk lives here rather than bloating the
 client with fields nothing in production reads.
 
-🚨 **What this can and cannot tell you.** Everything here comes from the OpenRGB
+**What this can and cannot tell you.** Everything here comes from the OpenRGB
 *server's own model* of a device. It proves a packet arrived and was accepted. It
-does **not** prove a single LED lit. That distinction cost this project a full
-day: four separate readbacks reported perfect health while the Commander Core sat
-dark, because a wrong HID report size truncated the colour payload while leaving
-the command header -- and therefore every acknowledgement -- intact.
+does **not** prove a single LED lit: a wrong HID report size truncates the
+colour payload while leaving the command header -- and therefore every
+acknowledgement -- intact, so every readback reports perfect health while the
+Commander Core stays dark.
 
 For anything that must be true of the *hardware*, use ``check_hardware.py``,
 which asks a human.
@@ -30,8 +30,8 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 def expected_colour(config, near, far, group, order: str = "RGB"):
     """What a device will actually be holding for a published near/far pair.
 
-    🚨 **The published colour is not the colour that reaches the LEDs**, and
-    every stage between them has bitten a check in this directory:
+    **The published colour is not the colour that reaches the LEDs.** Every
+    stage between them must be modelled:
 
     1. ``cohere`` pulls near and far toward each other by ``group_cohesion``, so
        the case reads as one lit room rather than two halves arguing;
@@ -41,10 +41,9 @@ def expected_colour(config, near, far, group, order: str = "RGB"):
        RGB -- the ASRock board's zones are sent GRB, undoing the red/green
        swap OpenRGB makes on them (see ``openrgb_rg_swap``).
 
-    ``check_policy`` modelled only stage 2 and failed 6 of 10 against a daemon
-    that was perfectly correct; ``check_failures`` modelled none of them and
-    failed its own baseline. Both then accused the rig. Deriving it once, here,
-    is what stops the next stage from being missed by three files independently.
+    A check that models only some of the stages fails against a correct daemon.
+    Deriving the expectation once, here, stops a new stage from being missed by
+    several files independently.
     """
 
     toward_near, toward_far = cohere(near, far, config.group_cohesion)
@@ -63,8 +62,7 @@ def use_matterlights() -> Path:
     not a package this project depends on.
 
     Resolution order: ``$MATTERLIGHTS_SRC``, then a sibling checkout next to
-    this repository. Three scripts each carried the author's absolute path
-    before this existed, which made every one of them unrunnable anywhere else.
+    this repository.
     """
 
     override = os.getenv("MATTERLIGHTS_SRC")

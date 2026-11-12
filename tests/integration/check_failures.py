@@ -1,14 +1,12 @@
 """Break things under a live daemon and check it comes back.
 
-Every scenario here has actually happened on this rig: the OpenRGB server
-restarted underneath the daemon, the daemon killed outright, and a clean stop
-that must leave nothing lit.
+Scenarios: the OpenRGB server restarted underneath the daemon, the daemon
+killed outright, and a clean stop that must leave nothing lit.
 
-⚠️ **A recovery check must not be satisfiable by doing nothing.** The first
-version of the SIGKILL case waited for the hardware to show the expected colour
--- which it already did, because a killed daemon leaves its last frame standing.
-It passed instantly and proved nothing. Each check here now blanks the device
-first, so only a real write can satisfy it.
+**A recovery check must not be satisfiable by doing nothing.** A killed daemon
+leaves its last frame standing, so waiting for the hardware to show the
+expected colour would pass instantly. Each check here blanks the device first,
+so only a real write can satisfy it.
 """
 
 from __future__ import annotations

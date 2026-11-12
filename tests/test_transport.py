@@ -15,8 +15,7 @@ socket rather than a fake:
   daemon has let go.
 
 The unix tests skip where unix datagram sockets do not exist. The UDP tests run
-everywhere, which on this rig means the Windows transport is exercised from
-Linux on every run, long before Windows ever sees it.
+everywhere, so the Windows transport is exercised from Linux on every run.
 """
 
 from __future__ import annotations
@@ -165,7 +164,7 @@ class _RecordingSocket:
 
 
 class WindowsExclusiveUseTest(unittest.TestCase):
-    """🚨 Windows lets another socket share a UDP port unless told not to.
+    """Windows lets another socket share a UDP port unless told not to.
 
     With ``SO_REUSEADDR`` a second process can bind the same port and Windows
     then delivers each datagram to one of the two -- frames would silently go
@@ -249,12 +248,12 @@ class UnixTransportTest(unittest.TestCase):
         self.assertEqual(sock.recv(65535), b"fresh")
 
     def test_a_live_daemon_is_not_displaced(self) -> None:
-        """🚨 The old bind unlinked whatever was there -- including a LIVE socket.
+        """Binding must not unlink whatever is there -- including a LIVE socket.
 
-        A second daemon started by hand then took the path over, the first went
-        deaf and stale, and the two fought over the Commander Core: one writing
-        colour, the other writing black. hidraw has no exclusive open, so
-        nothing stopped them.
+        A second daemon started by hand would take the path over, the first would
+        go deaf and stale, and the two would fight over the Commander Core: one
+        writing colour, the other writing black. hidraw has no exclusive open, so
+        nothing else stops them.
         """
 
         sock = self._bound()

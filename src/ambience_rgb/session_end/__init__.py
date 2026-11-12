@@ -6,19 +6,17 @@ at all. What it does send, to top-level windows, is ``WM_QUERYENDSESSION`` and
 then ``WM_ENDSESSION`` -- so on Windows the daemon keeps one hidden window whose
 only job is to hear those and ask the daemon to stop.
 
-⚠️ **This covers LOGOFF, not shutdown.** matterlights runs the same window and
-measured it across eight session ends: at an ordinary shutdown or restart its
-callback fired zero times, while its window was demonstrably alive, and at a
-logoff it worked. The interactive session is torn down without the usual
-conversation. The layer that covers shutdown is the SYSTEM scheduled task on
+**This covers LOGOFF, not shutdown.** At an ordinary shutdown or restart the
+callback does not fire although the window is alive; at a logoff it does. The
+interactive session is torn down without the usual conversation. The layer that covers shutdown is the SYSTEM scheduled task on
 System event 1074, which runs ``ambience-rgb off --stop-daemon`` from session 0
 -- see ``scripts/windows/install.ps1``.
 
-Two things differ from matterlights' copy, because this daemon has hardware to
-release rather than a network call to make:
+Two things follow from this daemon having hardware to release rather than a
+network call to make:
 
 * the callback is only a flag, :meth:`Daemon.request_stop`, so it runs inline;
-* 🚨 **``WM_ENDSESSION`` waits for the daemon to finish.** Windows may end the
+* **``WM_ENDSESSION`` waits for the daemon to finish.** Windows may end the
   process the moment that message returns. Returning at once -- which a
   fire-and-forget callback can afford -- would let the session end while the
   black was still being written. So it blocks on ``finished``, bounded, because

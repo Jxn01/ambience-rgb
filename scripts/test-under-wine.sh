@@ -6,7 +6,7 @@
 # for the wrong reason. This runs the same suite on the real Windows build of
 # CPython -- python.org's embeddable zip -- so sys.platform is win32, os.getuid
 # and socket.AF_UNIX are really absent, and a file read with no encoding really
-# gets cp1252. Its first run found three tests that could only pass on Linux.
+# gets cp1252.
 #
 # What it cannot vouch for is Windows itself: Winsock, user32 and the rest are
 # Wine's re-implementations. A pass there is a good sign for those tests, not
@@ -39,7 +39,7 @@ done
 # Wine's user32 needs a display to create even a hidden window. Without one --
 # an SSH shell, a background job -- the session-end hook falls back to its null
 # hook and test_windows_gets_the_window FAILS, which reads as a regression and
-# is not one (it bit on 2026-10-07). From a GNOME Wayland session, borrow its
+# is not one. From a GNOME Wayland session, borrow its
 # Xwayland: DISPLAY=:0 XAUTHORITY="$(ls /run/user/$UID/.mutter-Xwaylandauth.*)".
 if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
     echo "test-under-wine: no DISPLAY -- test_windows_gets_the_window will fail; see the comment above" >&2

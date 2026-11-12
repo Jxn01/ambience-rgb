@@ -1,6 +1,6 @@
 """Configuration for ambience-rgb.
 
-Every fact about this particular rig -- which controller belongs to which
+Every fact about a particular machine -- which controller belongs to which
 group, which zones split, what is excluded, how fast each bus may be driven --
 lives in TOML rather than in the source. The program is machine-specific by
 purpose, but it should not be machine-specific by construction: a different
@@ -66,7 +66,7 @@ def platform_name(platform: str | None = None) -> str:
 
 REMOVED_KATANA_USB = (
     "[katana] enabled = true: the USB serial driver for the Sound Blaster Katana was "
-    "removed on 2026-10-07. The soundbar is driven through Home Assistant now: set "
+    "removed. The soundbar is driven through Home Assistant now: set "
     "[katana] enabled = false (or delete the section) and enable [katana_ha] -- see "
     "config.example.toml and the README's Katana section."
 )
@@ -109,7 +109,7 @@ class DeviceRule:
     The installers write these into OpenRGB's ``ASRock Polychrome USB`` /
     ``RGSwap`` settings -- the one per-zone swap OpenRGB exposes -- with
     ``ambience_rgb.openrgb_settings``, and the names must be OpenRGB's zone
-    names exactly. 🚨 A list, not a table of booleans: OpenRGB swaps a zone
+    names exactly. A list, not a table of booleans: OpenRGB swaps a zone
     when the board's table OR the setting says so, so a setting can force the
     swap on and never off. Empty leaves OpenRGB's settings alone.
     """
@@ -119,8 +119,7 @@ class DeviceRule:
     For hardware that should simply sit at one colour. It is written on connect
     and on every reconnect, and never on the tick loop -- which is the point:
     OpenRGB's Direct mode does not persist, so restarting the server leaves such
-    a device dark, and an ``excluded`` rule means nothing puts it back. That kept
-    costing this rig its keyboard.
+    a device dark, and an ``excluded`` rule means nothing puts it back.
     """
 
     def matches(self, controller_name: str) -> bool:
@@ -150,10 +149,9 @@ class CommanderConfig:
 class KatanaHAConfig:
     """The Sound Blaster Katana V2X, through Home Assistant's ``sb_katana`` integration.
 
-    HA owns the soundbar over Bluetooth; this only posts colours to it. Until
-    2026-10-07 the soundbar was driven over its USB serial port instead, by
-    ``[katana]``; that driver is gone, and a config still enabling it is refused
-    (see ``REMOVED_KATANA_USB``).
+    HA owns the soundbar over Bluetooth; this only posts colours to it. The old
+    USB serial driver (``[katana]``) is gone, and a config still enabling it is
+    refused (see ``REMOVED_KATANA_USB``).
     """
 
     enabled: bool = False
@@ -169,8 +167,8 @@ class KatanaHAConfig:
     token_file: str | None = None
     """Where the long-lived access token is read from, when
     ``$AMBIENCE_RGB_HA_TOKEN`` is unset. Unset: ``.ha-token`` at the root of this
-    checkout -- gitignored, and on the drive both operating systems share, so one
-    file serves both halves of the rig (see ha_stream.read_token)."""
+    checkout -- gitignored, so one file serves both operating systems when the
+    checkout is shared (see ha_stream.read_token)."""
     timeout_seconds: float = 2.0
 
 
@@ -186,11 +184,10 @@ class Config:
     openrgb_restart_command: tuple[str, ...] = ()
     """How to restart the OpenRGB server when it wedges beyond reconnecting.
 
-    🚨 **This server can stop driving hardware while still answering.** Observed
-    on 2026-09-10: round trips at 0.1 ms, new connections served normally, seven
-    controllers reported -- and three consecutive colour writes with no effect on
-    any device. The liveness probe cannot see that, because the server IS live.
-    Only restarting it recovered.
+    **This server can stop driving hardware while still answering:** round
+    trips at 0.1 ms, new connections served normally, every controller reported
+    -- and colour writes with no effect on any device. The liveness probe cannot
+    see that, because the server IS live. Only restarting it recovers.
 
     Already resolved for this platform. Empty disables it, which is the default:
     restarting another program is a real side effect and has to be opted into.
@@ -232,9 +229,9 @@ class Config:
         return None
 
 
-# ⚠️ Every helper below raises ConfigError, never a bare ValueError. The CLI turns
+# Every helper below raises ConfigError, never a bare ValueError. The CLI turns
 # a ConfigError into one clean line and exit 2; anything else escapes as a
-# traceback, which is how a typo in `saturation` used to present.
+# traceback.
 
 
 def _validate_order(value, where: str) -> str:
@@ -325,9 +322,8 @@ def _validate_group(value: str, where: str) -> str:
 def _validate_sync_group(value, where: str) -> str:
     """A group for a device written whole in one go: near or far, never excluded.
 
-    🚨 "excluded" cannot leave part of such a device alone. It used to be
-    accepted anyway -- and then driven with the FAR colour, the opposite of
-    what it says. Leaving the device alone is what ``enabled = false`` is for.
+    "excluded" cannot leave part of such a device alone: it would be driven with the FAR colour,
+    the opposite of what it says. Leaving the device alone is what ``enabled = false`` is for.
     """
 
     group = _validate_group(value, where)
@@ -360,10 +356,8 @@ def _expand_runtime_vars(raw: str) -> str:
     it. That is not an error anyone can read. Substituting the value systemd
     would have used keeps the same config file valid in both contexts.
 
-    ⚠️ That substitution needs ``os.getuid``, which does not exist on Windows.
-    It used to be called unconditionally, so the shipped config -- whose path is
-    exactly ``$XDG_RUNTIME_DIR/...`` -- crashed there at load. Windows no longer
-    reaches this at all (it uses UDP), and the lookup is guarded regardless.
+    That substitution needs ``os.getuid``, which does not exist on Windows. The
+    lookup is guarded, and Windows does not reach this at all (it uses UDP).
     Any variable still unexpanded afterwards is an error that names it.
     """
 
@@ -391,7 +385,7 @@ def _udp_port(value) -> int:
 def _parse_endpoint(section, *, base_dir: Path | None, platform: str) -> Endpoint:
     """The transport for this platform, reading only the keys that transport uses.
 
-    That last part is load-bearing, not tidiness: the unix path is never even
+    Reading only those keys is load-bearing: the unix path is never even
     looked at when the transport is UDP, which is what keeps the shipped
     config's ``$XDG_RUNTIME_DIR`` away from Windows.
     """
@@ -427,7 +421,7 @@ def _parse_endpoint(section, *, base_dir: Path | None, platform: str) -> Endpoin
 
 
 def _command_list(value, where: str) -> tuple[str, ...]:
-    # 🚨 A bare string is refused rather than tuple()'d: that would be a tuple
+    # A bare string is refused rather than tuple()'d: that would be a tuple
     # of its characters, and the restart would run a program called "s".
     if not isinstance(value, (list, tuple)):
         raise ConfigError(
